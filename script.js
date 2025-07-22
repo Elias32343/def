@@ -17,7 +17,7 @@ const CONFIG = {
         comentario: 'entry.43776270'
     },
     SYNC_INTERVAL: 30000, // 30 segundos
-    FORM_DELAY: 15000,    // 15 segundos para que Google Forms procese
+    FORM_DELAY: 30000,    // 15 segundos para que Google Forms procese
     TOTAL_EQUIPOS: 40,
     RETRY_ATTEMPTS: 3,
     RETRY_DELAY: 1000
