@@ -17,23 +17,20 @@ const CONFIG = {
         comentario: 'entry.43776270'
     },
     SYNC_INTERVAL: 30000, // 30 segundos
-    FORM_DELAY: 30000,    // 30 segundos para que Google Forms procese (aumentado)
+    FORM_DELAY: 15000,    // 15 segundos para que Google Forms procese
     TOTAL_EQUIPOS: 40,
     RETRY_ATTEMPTS: 3,
-    RETRY_DELAY: 1000,
-    PENDING_SYNC_RETRIES: 5 // Intentos para verificar si el registro llegó a Google Sheets
+    RETRY_DELAY: 1000
 };
 
 // Estado de la aplicación
 class AppState {
     constructor() {
-        this.personas = new Map();
+        this.personas = new Map(); // Usar Map para mejor rendimiento en búsquedas
         this.historial = [];
-        this.pendingOperations = new Map(); // Para trackear operaciones pendientes
         this.equipoSeleccionado = null;
         this.isLoading = false;
         this.syncIntervalId = null;
-        this.lastSyncTime = null;
     }
 
     // Métodos para manejo de personas
@@ -54,84 +51,23 @@ class AppState {
         return this.personas.size;
     }
 
-    // Métodos para manejo de historial mejorados
+    // Métodos para manejo de historial
     addHistorialEntry(entry) {
-        const entryWithId = {
+        this.historial.unshift({
             ...entry,
-            marcaTemporal: new Date(),
-            _localId: Date.now() + Math.random() // ID único para tracking local
-        };
-        
-        this.historial.unshift(entryWithId);
-        console.log('✓ Entrada agregada al historial local:', entryWithId);
-        return entryWithId;
+            marcaTemporal: new Date()
+        });
     }
 
     removeHistorialEntry(entry) {
-        const index = this.historial.findIndex(h => 
-            h._localId === entry._localId || 
-            (h.equipo === entry.equipo && h.tipo === entry.tipo && 
-             Math.abs(h.marcaTemporal - entry.marcaTemporal) < 5000)
-        );
-        
+        const index = this.historial.indexOf(entry);
         if (index > -1) {
-            const removed = this.historial.splice(index, 1)[0];
-            console.log('✓ Entrada removida del historial local:', removed);
-            return removed;
+            this.historial.splice(index, 1);
         }
-        return null;
     }
 
     setHistorial(historialArray) {
-        // Preservar operaciones pendientes al actualizar desde servidor
-        const pendingEntries = this.historial.filter(h => h._localId && 
-            this.pendingOperations.has(h._localId));
-        
-        // Establecer historial desde servidor
         this.historial = historialArray.sort((a, b) => b.marcaTemporal - a.marcaTemporal);
-        
-        // Re-agregar operaciones pendientes que no aparecieron en el servidor
-        pendingEntries.forEach(entry => {
-            // Verificar si ya existe en el historial del servidor
-            const exists = this.historial.some(h => 
-                h.equipo === entry.equipo && 
-                h.tipo === entry.tipo &&
-                h.documento === entry.documento &&
-                Math.abs(new Date(h.marcaTemporal) - entry.marcaTemporal) < 60000 // 1 minuto de tolerancia
-            );
-            
-            if (!exists) {
-                console.log('🔄 Preservando operación pendiente:', entry);
-                this.historial.unshift(entry);
-            } else {
-                console.log('✓ Operación encontrada en servidor, removiendo pendiente:', entry);
-                this.pendingOperations.delete(entry._localId);
-            }
-        });
-        
-        console.log(`✓ Historial actualizado: ${this.historial.length} entradas (${pendingEntries.length} pendientes preservadas)`);
-    }
-
-    // Métodos para operaciones pendientes
-    addPendingOperation(localId, operationData) {
-        this.pendingOperations.set(localId, {
-            ...operationData,
-            timestamp: Date.now(),
-            retries: 0
-        });
-        console.log('📝 Operación marcada como pendiente:', localId, operationData);
-    }
-
-    removePendingOperation(localId) {
-        const removed = this.pendingOperations.delete(localId);
-        if (removed) {
-            console.log('✅ Operación pendiente completada:', localId);
-        }
-        return removed;
-    }
-
-    getPendingOperationsCount() {
-        return this.pendingOperations.size;
     }
 
     getEquipoState(numeroEquipo) {
@@ -146,8 +82,7 @@ class AppState {
         return {
             prestado: ultimoMovimiento.tipo === 'Préstamo',
             ultimoMovimiento,
-            nombreCompleto: ultimoMovimiento.nombreCompleto,
-            isPending: ultimoMovimiento._localId && this.pendingOperations.has(ultimoMovimiento._localId)
+            nombreCompleto: ultimoMovimiento.nombreCompleto
         };
     }
 }
@@ -160,7 +95,7 @@ const Utils = {
     // Parsear respuesta de Google Sheets con mejor manejo de errores
     parseGoogleSheetsResponse(text) {
         try {
-            if (!text.startsWith('/*O_o*/\ngoogle.visualization.Query.setResponse(')) {
+            if (!text.startsWith('/O_o/\ngoogle.visualization.Query.setResponse(')) {
                 throw new Error('Formato de respuesta inválido');
             }
             
@@ -174,7 +109,7 @@ const Utils = {
             return jsonData;
         } catch (error) {
             console.error('Error parseando respuesta de Google Sheets:', error);
-            throw new Error(`Error de formato de datos: ${error.message}`);
+            throw new Error(Error de formato de datos: ${error.message});
         }
     },
 
@@ -192,7 +127,7 @@ const Utils = {
                 if (i === attempts - 1) throw error;
                 
                 const delay = CONFIG.RETRY_DELAY * Math.pow(2, i);
-                console.warn(`Intento ${i + 1} falló, reintentando en ${delay}ms...`);
+                console.warn(Intento ${i + 1} falló, reintentando en ${delay}ms...);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
@@ -235,11 +170,11 @@ const UI = {
         return element;
     },
 
-    // Mostrar estado de sincronización con información de operaciones pendientes
+    // Mostrar estado de sincronización con mejor UX
     showSyncStatus(mensaje, tipo = 'info', autoHide = true) {
         const syncStatus = document.getElementById('sync-status');
         if (!syncStatus) {
-            console.log(`SYNC: ${mensaje} (${tipo})`);
+            console.log(SYNC: ${mensaje} (${tipo}));
             return;
         }
         
@@ -247,18 +182,11 @@ const UI = {
             success: '#28a745',
             error: '#dc3545',
             warning: '#ffc107',
-            info: '#17a2b8',
-            pending: '#6f42c1'
+            info: '#17a2b8'
         };
         
-        // Agregar información de operaciones pendientes
-        const pendingCount = appState.getPendingOperationsCount();
-        const finalMessage = pendingCount > 0 ? 
-            `${mensaje} (${pendingCount} operación${pendingCount > 1 ? 'es' : ''} pendiente${pendingCount > 1 ? 's' : ''})` : 
-            mensaje;
-        
-        syncStatus.textContent = finalMessage;
-        syncStatus.className = `sync-status ${tipo}`;
+        syncStatus.textContent = mensaje;
+        syncStatus.className = sync-status ${tipo};
         syncStatus.style.color = colors[tipo] || colors.info;
         syncStatus.style.opacity = '1';
         
@@ -266,12 +194,8 @@ const UI = {
             setTimeout(() => {
                 syncStatus.style.opacity = '0';
                 setTimeout(() => {
-                    if (appState.getPendingOperationsCount() === 0) {
-                        syncStatus.textContent = '';
-                        syncStatus.className = 'sync-status';
-                    } else {
-                        this.showSyncStatus('Operaciones pendientes de sincronizar', 'pending', false);
-                    }
+                    syncStatus.textContent = '';
+                    syncStatus.className = 'sync-status';
                 }, 300);
             }, 4000);
         }
@@ -323,13 +247,13 @@ const UI = {
         // Buscar en base de datos
         const persona = appState.findPersonaByDocumento(documento);
         if (persona) {
-            statusElement.textContent = `✓ ${persona.nombreCompleto} - ${persona.curso}`;
+            statusElement.textContent = ✓ ${persona.nombreCompleto} - ${persona.curso};
             statusElement.className = 'success';
             statusElement.style.color = '#28a745';
             btnRegistrar.disabled = false;
             btnRegistrar.style.opacity = '1';
         } else {
-            statusElement.textContent = `✗ Documento no encontrado (${appState.getPersonasCount()} registros disponibles)`;
+            statusElement.textContent = ✗ Documento no encontrado (${appState.getPersonasCount()} registros disponibles);
             statusElement.className = 'error';
             statusElement.style.color = '#dc3545';
             btnRegistrar.disabled = true;
@@ -344,7 +268,7 @@ const DataLoader = {
     async loadPersonas() {
         const response = await fetch(CONFIG.URLS.PERSONAS);
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(HTTP ${response.status}: ${response.statusText});
         }
         
         const text = await response.text();
@@ -361,21 +285,21 @@ const DataLoader = {
                         telefono: Utils.getCellValue(row.c[4])
                     };
                 } catch (err) {
-                    console.warn(`Error procesando fila ${index + 2} de personas:`, err);
+                    console.warn(Error procesando fila ${index + 2} de personas:, err);
                     return null;
                 }
             })
             .filter(p => p && p.documento && Utils.isValidDocument(p.documento));
         
         appState.setPersonas(personas);
-        console.log(`✓ Personas cargadas: ${appState.getPersonasCount()}`);
+        console.log(✓ Personas cargadas: ${appState.getPersonasCount()});
     },
 
     // Cargar historial con validación mejorada
     async loadHistorial() {
         const response = await fetch(CONFIG.URLS.HISTORIAL);
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw new Error(HTTP ${response.status}: ${response.statusText});
         }
         
         const text = await response.text();
@@ -401,28 +325,25 @@ const DataLoader = {
                         comentario: Utils.getCellValue(row.c[9])
                     };
                 } catch (err) {
-                    console.warn(`Error procesando fila ${index + 2} de historial:`, err);
+                    console.warn(Error procesando fila ${index + 2} de historial:, err);
                     return null;
                 }
             })
             .filter(h => h && h.equipo && ['Préstamo', 'Devolución'].includes(h.tipo));
         
         appState.setHistorial(historial);
-        appState.lastSyncTime = new Date();
-        console.log(`✓ Historial cargado: ${historial.length} registros`);
+        console.log(✓ Historial cargado: ${historial.length} registros);
     },
 
     // Cargar todos los datos con recuperación de errores
-    async loadAllData(showStatus = true) {
+    async loadAllData() {
         if (appState.isLoading) {
             console.log('Carga ya en progreso...');
             return;
         }
         
         appState.isLoading = true;
-        if (showStatus) {
-            UI.showSyncStatus('Sincronizando datos...', 'info', false);
-        }
+        UI.showSyncStatus('Sincronizando datos...', 'info', false);
         
         try {
             await Utils.retryWithBackoff(async () => {
@@ -433,19 +354,11 @@ const DataLoader = {
             });
             
             EquipmentGrid.updateAllEquipmentStates();
-            
-            const pendingCount = appState.getPendingOperationsCount();
-            if (pendingCount > 0) {
-                UI.showSyncStatus(`Datos sincronizados - ${pendingCount} operación${pendingCount > 1 ? 'es' : ''} pendiente${pendingCount > 1 ? 's' : ''}`, 'pending', false);
-            } else if (showStatus) {
-                UI.showSyncStatus('✓ Datos sincronizados correctamente', 'success');
-            }
+            UI.showSyncStatus('✓ Datos sincronizados correctamente', 'success');
             
         } catch (error) {
             console.error('Error cargando datos:', error);
-            if (showStatus) {
-                UI.showSyncStatus('⚠ Error de sincronización - usando datos locales', 'warning');
-            }
+            UI.showSyncStatus('⚠ Error de sincronización - usando datos locales', 'warning');
             
             // Intentar actualizar solo la UI con datos existentes
             try {
@@ -502,7 +415,7 @@ const EquipmentGrid = {
             
             const numero = UI.createElement('div', {
                 style: { fontWeight: 'bold' }
-            }, `Equipo ${i}`);
+            }, Equipo ${i});
             
             const estado = UI.createElement('div', {
                 class: 'estado-equipo',
@@ -534,42 +447,25 @@ const EquipmentGrid = {
             
             updates.push(() => {
                 // Limpiar clases previas
-                elemento.classList.remove('equipo-prestado', 'equipo-disponible', 'equipo-pending');
+                elemento.classList.remove('equipo-prestado', 'equipo-disponible');
                 
                 if (estadoEquipo.prestado) {
                     elemento.classList.add('equipo-prestado');
-                    
-                    // Agregar indicador visual para operaciones pendientes
-                    if (estadoEquipo.isPending) {
-                        elemento.classList.add('equipo-pending');
-                        Object.assign(elemento.style, {
-                            backgroundColor: '#e2e3ff',
-                            borderColor: '#6f42c1',
-                            color: '#563d7c',
-                            borderStyle: 'dashed'
-                        });
-                    } else {
-                        Object.assign(elemento.style, {
-                            backgroundColor: '#d4edda',
-                            borderColor: '#28a745',
-                            color: '#155724',
-                            borderStyle: 'solid'
-                        });
-                    }
+                    Object.assign(elemento.style, {
+                        backgroundColor: '#d4edda',
+                        borderColor: '#28a745',
+                        color: '#155724'
+                    });
                     
                     if (estadoElemento) {
-                        const statusText = estadoEquipo.isPending ? 
-                            `Prestado a: ${estadoEquipo.nombreCompleto} (pendiente)` :
-                            `Prestado a: ${estadoEquipo.nombreCompleto}`;
-                        estadoElemento.textContent = statusText;
+                        estadoElemento.textContent = Prestado a: ${estadoEquipo.nombreCompleto};
                     }
                 } else {
                     elemento.classList.add('equipo-disponible');
                     Object.assign(elemento.style, {
                         backgroundColor: '#f8f9fa',
                         borderColor: '#dee2e6',
-                        color: '#495057',
-                        borderStyle: 'solid'
+                        color: '#495057'
                     });
                     
                     if (estadoElemento) {
@@ -588,7 +484,7 @@ const EquipmentGrid = {
 // Manejo de modales mejorado
 const EquipmentModal = {
     open(numeroEquipo) {
-        console.log(`Abriendo modal para equipo ${numeroEquipo}`);
+        console.log(Abriendo modal para equipo ${numeroEquipo});
         appState.equipoSeleccionado = numeroEquipo;
         
         const estadoEquipo = appState.getEquipoState(numeroEquipo.toString());
@@ -597,11 +493,11 @@ const EquipmentModal = {
         const modal = document.getElementById('modalMetodos');
         const header = modal?.querySelector('.modal-header h2');
         if (header) {
-            header.textContent = `Equipo ${numeroEquipo}`;
+            header.textContent = Equipo ${numeroEquipo};
         }
         
         if (estadoEquipo.prestado) {
-            this.showReturnForm(estadoEquipo.ultimoMovimiento, estadoEquipo.isPending);
+            this.showReturnForm(estadoEquipo.ultimoMovimiento);
         } else {
             this.showLoanForm();
         }
@@ -702,24 +598,6 @@ const EquipmentModal = {
         }, 100);
     },
 
-    showReturnForm(ultimoMovimiento, isPending = false) {
-        const listaMetodos = document.getElementById('listaMetodos');
-        if (!listaMetodos) return;
-        
-        const pendingWarning = isPending ? `
-            <div style="background-color: #e2e3ff; border: 1px solid #6f42c1; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <span style="font-size: 1.2em;">⏳</span>
-                    <div>
-                        <strong style="color: #563d7c;">Operación Pendiente</strong>
-                        <p style="margin: 5px 0 0 0; font-size: 0.9em; color: #563d7c;">
-                            Este préstamo aún se está sincronizando con el servidor.
-                        </p>
-                    </div>
-                </div>
-            </div>
-        ` : '';
-
     showReturnForm(ultimoMovimiento) {
         const listaMetodos = document.getElementById('listaMetodos');
         if (!listaMetodos) return;
@@ -787,7 +665,7 @@ const LoanProcessor = {
         
         const persona = appState.findPersonaByDocumento(formData.documento);
         if (!persona) {
-            alert(`El documento "${formData.documento}" no está registrado.\n\nPersonas disponibles: ${appState.getPersonasCount()}`);
+            alert(El documento "${formData.documento}" no está registrado.\n\nPersonas disponibles: ${appState.getPersonasCount()});
             return;
         }
         
@@ -972,7 +850,7 @@ const FormSubmitter = {
         if (console.log) {
             console.group('Datos enviados a Google Forms:');
             Object.entries(CONFIG.FORM_ENTRIES).forEach(([key, entryId]) => {
-                console.log(`${key}: "${registro[key] || ''}" → ${entryId}`);
+                console.log(${key}: "${registro[key] || ''}" → ${entryId});
             });
             console.groupEnd();
         }
@@ -1050,7 +928,7 @@ const EventManager = {
             }
         }, CONFIG.SYNC_INTERVAL);
         
-        console.log(`✓ Sincronización automática cada ${CONFIG.SYNC_INTERVAL / 1000}s`);
+        console.log(✓ Sincronización automática cada ${CONFIG.SYNC_INTERVAL / 1000}s);
     },
 
     // Limpiar recursos
@@ -1066,7 +944,7 @@ const EventManager = {
 const Debug = {
     logPersonas() {
         console.group('🔍 DEBUG - PERSONAS');
-        console.log(`Total personas: ${appState.getPersonasCount()}`);
+        console.log(Total personas: ${appState.getPersonasCount()});
         
         const personas = Array.from(appState.personas.values()).slice(0, 10);
         console.table(personas.map(p => ({
@@ -1080,7 +958,7 @@ const Debug = {
 
     logHistorial() {
         console.group('🔍 DEBUG - HISTORIAL');
-        console.log(`Total registros: ${appState.historial.length}`);
+        console.log(Total registros: ${appState.historial.length});
         
         const recientes = appState.historial.slice(0, 10);
         console.table(recientes.map(h => ({
@@ -1112,15 +990,15 @@ const Debug = {
             }
         }
         
-        console.log(`Equipos prestados: ${prestados.length}`);
+        console.log(Equipos prestados: ${prestados.length});
         console.table(prestados);
-        console.log(`Equipos disponibles (${disponibles.length}):`, disponibles.join(', '));
+        console.log(Equipos disponibles (${disponibles.length}):, disponibles.join(', '));
         
         console.groupEnd();
     },
 
     resetMalla() {
-        if (!confirm('⚠️ ¿Está seguro de resetear la vista local?\n\nEsto mostrará todos los equipos como disponibles hasta la próxima sincronización.')) {
+        if (!confirm('⚠ ¿Está seguro de resetear la vista local?\n\nEsto mostrará todos los equipos como disponibles hasta la próxima sincronización.')) {
             return;
         }
         
@@ -1137,8 +1015,8 @@ const Debug = {
 
     showStats() {
         console.group('📊 ESTADÍSTICAS DEL SISTEMA');
-        console.log(`Personas registradas: ${appState.getPersonasCount()}`);
-        console.log(`Movimientos registrados: ${appState.historial.length}`);
+        console.log(Personas registradas: ${appState.getPersonasCount()});
+        console.log(Movimientos registrados: ${appState.historial.length});
         
         const equiposPrestados = [];
         for (let i = 1; i <= CONFIG.TOTAL_EQUIPOS; i++) {
@@ -1147,15 +1025,15 @@ const Debug = {
             }
         }
         
-        console.log(`Equipos prestados: ${equiposPrestados.length}/${CONFIG.TOTAL_EQUIPOS}`);
-        console.log(`Tasa de utilización: ${((equiposPrestados.length / CONFIG.TOTAL_EQUIPOS) * 100).toFixed(1)}%`);
+        console.log(Equipos prestados: ${equiposPrestados.length}/${CONFIG.TOTAL_EQUIPOS});
+        console.log(Tasa de utilización: ${((equiposPrestados.length / CONFIG.TOTAL_EQUIPOS) * 100).toFixed(1)}%);
         
         // Estadísticas por tipo de movimiento
         const prestamos = appState.historial.filter(h => h.tipo === 'Préstamo').length;
         const devoluciones = appState.historial.filter(h => h.tipo === 'Devolución').length;
         
-        console.log(`Préstamos registrados: ${prestamos}`);
-        console.log(`Devoluciones registradas: ${devoluciones}`);
+        console.log(Préstamos registrados: ${prestamos});
+        console.log(Devoluciones registradas: ${devoluciones});
         
         console.groupEnd();
     }
@@ -1172,7 +1050,7 @@ const App = {
             const missingElements = requiredElements.filter(id => !document.getElementById(id));
             
             if (missingElements.length > 0) {
-                throw new Error(`Elementos DOM faltantes: ${missingElements.join(', ')}`);
+                throw new Error(Elementos DOM faltantes: ${missingElements.join(', ')});
             }
             
             console.log('✓ Elementos DOM verificados');
@@ -1196,7 +1074,7 @@ const App = {
             UI.showSyncStatus('Error crítico - verifique la consola', 'error');
             
             // Mostrar error al usuario
-            alert(`Error inicializando la aplicación:\n\n${error.message}\n\nRevise la consola para más detalles.`);
+            alert(Error inicializando la aplicación:\n\n${error.message}\n\nRevise la consola para más detalles.);
         } finally {
             console.groupEnd();
         }
