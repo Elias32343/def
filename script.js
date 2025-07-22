@@ -72,6 +72,11 @@ const utils = {
 // UI Functions
 const ui = {
     showSync(msg, type = 'info', autoHide = true) {
+        // Filtrar mensajes de sincronización automática
+        if (msg === 'Sincronizando...' || msg === '✓ Sincronizado') {
+            return;
+        }
+        
         const el = document.getElementById('sync-status');
         if (!el) return console.log(`SYNC: ${msg} (${type})`);
         
@@ -180,10 +185,12 @@ const loader = {
     async loadAll() {
         if (state.isLoading) return;
         state.isLoading = true;
+        ui.showSync('Sincronizando...', 'info', false);
         
         try {
             await utils.retry(() => Promise.all([this.loadPersonas(), this.loadHistorial()]));
             grid.updateAll();
+            ui.showSync('✓ Sincronizado', 'success');
         } catch (e) {
             console.error('Error:', e);
             ui.showSync('⚠ Error - usando datos locales', 'warning');
@@ -290,23 +297,13 @@ const modal = {
             if (docInput) {
                 docInput.focus();
                 docInput.oninput = e => ui.validateDoc(e.target.value.trim());
-                docInput.onkeydown = e => {
-                    // Permitir teclas de control
-                    if (['Backspace', 'Delete', 'Tab', 'Enter', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
-                    // Permitir solo números
-                    if (!/\d/.test(e.key)) e.preventDefault();
+                docInput.onkeypress = e => {
+                    if (!/\d/.test(e.key) && !['Backspace', 'Delete', 'Tab', 'Enter'].includes(e.key)) e.preventDefault();
                 };
             }
             
             const form = document.querySelector('.formulario-prestamo');
-            if (form) {
-                form.onkeydown = e => {
-                    if (e.key === 'Enter' && !e.target.matches('textarea')) {
-                        e.preventDefault();
-                        loan.process();
-                    }
-                };
-            }
+            if (form) form.onkeypress = e => e.key === 'Enter' && !e.target.matches('textarea') && (e.preventDefault(), loan.process());
         }, 100);
     },
     
