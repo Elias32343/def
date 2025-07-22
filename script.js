@@ -74,15 +74,44 @@ async function cargarDatos() {
     mostrarEstadoSync('Sincronizando datos...');
     
     try {
+        // Guardar el estado actual antes de recargar
+        const equiposLocales = {};
+        for (let i = 1; i <= 40; i++) {
+            const estado = obtenerEstadoEquipo(i.toString());
+            if (estado.prestado) {
+                equiposLocales[i.toString()] = estado.ultimoMovimiento;
+            }
+        }
+        
         await Promise.all([
             cargarPersonas(),
             cargarHistorial()
         ]);
+        
+        // Si no hay datos en el historial de Google Sheets, mantener los datos locales
+        if (historial.length === 0) {
+            console.log('No hay historial en Google Sheets, manteniendo datos locales');
+            // Recrear historial desde equipos locales
+            Object.keys(equiposLocales).forEach(equipo => {
+                const movimiento = equiposLocales[equipo];
+                if (movimiento && !historial.find(h => 
+                    h.equipo === equipo && 
+                    h.documento === movimiento.documento && 
+                    h.tipo === movimiento.tipo &&
+                    Math.abs(h.marcaTemporal - movimiento.marcaTemporal) < 60000 // Mismo minuto
+                )) {
+                    historial.unshift(movimiento);
+                }
+            });
+        }
+        
         actualizarEstadoEquipos();
         mostrarEstadoSync('Datos sincronizados correctamente', 'success');
     } catch (error) {
         console.error('Error cargando datos:', error);
-        mostrarEstadoSync('Error sincronizando datos', 'error');
+        mostrarEstadoSync('Error sincronizando datos - manteniendo datos locales', 'error');
+        // En caso de error, solo actualizar visualmente sin cambiar el historial
+        actualizarEstadoEquipos();
     }
 }
 
@@ -445,10 +474,12 @@ async function procesarPrestamo() {
         await registrarEnGoogleForm(registro);
         mostrarEstadoSync('Préstamo registrado correctamente', 'success');
         
-        // Recargar datos para sincronizar
+        // NO recargar inmediatamente - Google Forms tarda en procesar
+        // Recargar después de más tiempo para que se refleje en Google Sheets
         setTimeout(() => {
+            console.log('Recargando datos después de registro exitoso...');
             cargarDatos();
-        }, 2000);
+        }, 15000); // Esperar 15 segundos
         
     } catch (error) {
         console.error('Error registrando préstamo:', error);
@@ -505,10 +536,11 @@ async function procesarDevolucion() {
         await registrarEnGoogleForm(registro);
         mostrarEstadoSync('Devolución registrada correctamente', 'success');
         
-        // Recargar datos para sincronizar
+        // NO recargar inmediatamente - Google Forms tarda en procesar
         setTimeout(() => {
+            console.log('Recargando datos después de devolución exitosa...');
             cargarDatos();
-        }, 2000);
+        }, 15000); // Esperar 15 segundos
         
     } catch (error) {
         console.error('Error registrando devolución:', error);
@@ -523,6 +555,7 @@ async function procesarDevolucion() {
 
 // Registrar en Google Forms
 async function registrarEnGoogleForm(registro) {
+    console.log('Enviando registro a Google Forms...');
     const formData = new FormData();
     
     // Agregar todos los campos
@@ -539,7 +572,15 @@ async function registrarEnGoogleForm(registro) {
             body: formData
         });
         
-        console.log('Registro enviado a Google Forms');
+        console.log('Registro enviado a Google Forms exitosamente');
+        
+        // IMPORTANTE: Verificar que los entry IDs sean correctos
+        // Si Google Forms no recibe correctamente los datos, no aparecerán en Google Sheets
+        console.log('VERIFICA QUE LOS ENTRY IDS SEAN CORRECTOS EN TU FORMULARIO:');
+        Object.keys(FORM_ENTRIES).forEach(key => {
+            console.log(`${key}: ${FORM_ENTRIES[key]}`);
+        });
+        
         return true;
         
     } catch (error) {
