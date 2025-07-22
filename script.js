@@ -180,12 +180,10 @@ const loader = {
     async loadAll() {
         if (state.isLoading) return;
         state.isLoading = true;
-        ui.showSync('Sincronizando...', 'info', false);
         
         try {
             await utils.retry(() => Promise.all([this.loadPersonas(), this.loadHistorial()]));
             grid.updateAll();
-            ui.showSync('✓ Sincronizado', 'success');
         } catch (e) {
             console.error('Error:', e);
             ui.showSync('⚠ Error - usando datos locales', 'warning');
