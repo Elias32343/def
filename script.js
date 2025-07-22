@@ -79,21 +79,37 @@ async function cargarDatos() {
     }
 }
 
-// Cargar base de datos de personas
+// Cargar base de datos de personas - CORREGIDO
 async function cargarPersonas() {
     try {
         const response = await fetch(URL_PERSONAS);
         const text = await response.text();
         const jsonData = JSON.parse(text.substring(47).slice(0, -2));
         
-        personas = jsonData.table.rows.slice(1).map(row => ({
-            nombreCompleto: row.c[1] ? row.c[1].v : '',
-            documento: row.c[2] ? row.c[2].v.toString() : '',
-            curso: row.c[3] ? row.c[3].v : '',
-            telefono: row.c[4] ? row.c[4].v.toString() : ''
-        })).filter(p => p.documento); // Filtrar registros sin documento
+        // CORRECCIÓN: El mapeo de columnas estaba mal
+        // Según tu descripción:
+        // columna 0 (a): Marca temporal
+        // columna 1 (b): Nombre Completo  
+        // columna 2 (c): Documento
+        // columna 3 (d): Curso (aunque dijiste columna c, debe ser d)
+        // columna 4 (e): Teléfono (aunque dijiste columna d, debe ser e)
         
-        console.log('Personas cargadas:', personas.length);
+        personas = jsonData.table.rows.slice(1).map(row => {
+            const persona = {
+                nombreCompleto: row.c[1] ? row.c[1].v : '',
+                documento: row.c[2] ? row.c[2].v.toString().trim() : '', // Agregado trim()
+                curso: row.c[3] ? row.c[3].v : '',
+                telefono: row.c[4] ? row.c[4].v.toString().trim() : '' // Agregado trim()
+            };
+            
+            // Debug: mostrar en consola para verificar
+            console.log('Persona cargada:', persona);
+            return persona;
+        }).filter(p => p.documento && p.documento.length > 0); // Filtrar registros sin documento
+        
+        console.log('Total personas cargadas:', personas.length);
+        console.log('Documentos disponibles:', personas.map(p => p.documento));
+        
     } catch (error) {
         console.error('Error cargando personas:', error);
         throw error;
@@ -111,9 +127,9 @@ async function cargarHistorial() {
             marcaTemporal: row.c[0] ? new Date(row.c[0].v) : new Date(),
             equipo: row.c[1] ? row.c[1].v.toString() : '',
             nombreCompleto: row.c[2] ? row.c[2].v : '',
-            documento: row.c[3] ? row.c[3].v.toString() : '',
+            documento: row.c[3] ? row.c[3].v.toString().trim() : '', // Agregado trim()
             curso: row.c[4] ? row.c[4].v : '',
-            telefono: row.c[5] ? row.c[5].v.toString() : '',
+            telefono: row.c[5] ? row.c[5].v.toString().trim() : '', // Agregado trim()
             profesorEncargado: row.c[6] ? row.c[6].v : '',
             materia: row.c[7] ? row.c[7].v : '',
             tipo: row.c[8] ? row.c[8].v : '',
@@ -196,6 +212,7 @@ function mostrarModalPrestamo() {
             <div style="margin-bottom: 15px;">
                 <label for="documento" style="display: block; margin-bottom: 5px; font-weight: bold;">Documento:</label>
                 <input type="text" id="documento" placeholder="Ingrese el número de documento" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
+                <small id="documento-status" style="display: block; margin-top: 5px; font-size: 0.8em;"></small>
             </div>
             
             <div style="margin-bottom: 15px;">
@@ -209,7 +226,7 @@ function mostrarModalPrestamo() {
             </div>
             
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                <button onclick="procesarPrestamo()" style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">
+                <button id="btn-registrar" onclick="procesarPrestamo()" style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">
                     Registrar Préstamo
                 </button>
                 <button onclick="cerrarModal()" style="background-color: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer;">
@@ -219,10 +236,42 @@ function mostrarModalPrestamo() {
         </div>
     `;
     
-    // Enfocar el campo de documento
+    // Enfocar el campo de documento y agregar validación en tiempo real
     setTimeout(() => {
-        document.getElementById('documento').focus();
+        const documentoInput = document.getElementById('documento');
+        documentoInput.focus();
+        
+        // Validación en tiempo real
+        documentoInput.addEventListener('input', function() {
+            validarDocumentoEnTiempoReal(this.value.trim());
+        });
     }, 100);
+}
+
+// Nueva función: validar documento en tiempo real
+function validarDocumentoEnTiempoReal(documento) {
+    const statusElement = document.getElementById('documento-status');
+    const btnRegistrar = document.getElementById('btn-registrar');
+    
+    if (!documento) {
+        statusElement.textContent = '';
+        statusElement.style.color = '';
+        btnRegistrar.disabled = false;
+        return;
+    }
+    
+    const persona = personas.find(p => p.documento === documento);
+    if (persona) {
+        statusElement.textContent = `✓ Documento válido - ${persona.nombreCompleto} (${persona.curso})`;
+        statusElement.style.color = '#28a745';
+        btnRegistrar.disabled = false;
+        btnRegistrar.style.opacity = '1';
+    } else {
+        statusElement.textContent = '✗ Documento no encontrado en la base de datos';
+        statusElement.style.color = '#dc3545';
+        btnRegistrar.disabled = true;
+        btnRegistrar.style.opacity = '0.6';
+    }
 }
 
 // Mostrar formulario de devolución
@@ -258,7 +307,7 @@ function mostrarModalDevolucion(ultimoMovimiento) {
     `;
 }
 
-// Procesar registro de préstamo
+// Procesar registro de préstamo - MEJORADO
 async function procesarPrestamo() {
     const documento = document.getElementById('documento').value.trim();
     const profesor = document.getElementById('profesor').value.trim();
@@ -272,7 +321,7 @@ async function procesarPrestamo() {
     // Validar que el documento exista en la base de personas
     const persona = personas.find(p => p.documento === documento);
     if (!persona) {
-        alert('El documento ingresado no está registrado en la base de datos de personas autorizadas');
+        alert(`El documento "${documento}" no está registrado en la base de datos de personas autorizadas.\n\nDocumentos disponibles: ${personas.length > 0 ? personas.map(p => p.documento).join(', ') : 'No hay documentos cargados'}`);
         return;
     }
     
@@ -404,6 +453,17 @@ function mostrarEstadoSync(mensaje, tipo = 'info') {
     }
 }
 
+// Nueva función de debugging
+function debugPersonas() {
+    console.log('=== DEBUG DE PERSONAS ===');
+    console.log('Total personas:', personas.length);
+    console.log('Primeras 5 personas:');
+    personas.slice(0, 5).forEach((p, i) => {
+        console.log(`${i + 1}. Documento: "${p.documento}", Nombre: "${p.nombreCompleto}"`);
+    });
+    console.log('Todos los documentos:', personas.map(p => `"${p.documento}"`));
+}
+
 // Funciones auxiliares para mejorar la experiencia de usuario
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
@@ -435,3 +495,6 @@ function resetearMalla() {
 
 console.log('Sistema de Préstamo de Equipos cargado correctamente');
 console.log('IMPORTANTE: Debes actualizar los FORM_ENTRIES con los IDs reales de tu formulario');
+
+// Agregar la función de debug al objeto window para poder llamarla desde la consola
+window.debugPersonas = debugPersonas;
