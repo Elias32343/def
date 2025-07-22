@@ -65,14 +65,12 @@ function crearMallaEquipos() {
 
 // Cargar datos de las bases de datos
 async function cargarDatos() {
-    mostrarEstadoSync('Sincronizando datos...');
     try {
         await Promise.all([
             cargarPersonas(),
             cargarHistorial()
         ]);
         actualizarEstadoEquipos();
-        mostrarEstadoSync('Datos sincronizados correctamente', 'success');
     } catch (error) {
         console.error('Error cargando datos:', error);
         mostrarEstadoSync('Error sincronizando datos', 'error');
@@ -340,13 +338,34 @@ async function procesarPrestamo() {
     try {
         mostrarEstadoSync('Registrando préstamo...');
         await registrarEnGoogleForm(registro);
+        
+        // Actualizar el historial local inmediatamente para feedback visual
+        const nuevoMovimiento = {
+            marcaTemporal: new Date(),
+            equipo: registro.equipo,
+            nombreCompleto: registro.nombreCompleto,
+            documento: registro.documento,
+            curso: registro.curso,
+            telefono: registro.telefono,
+            profesorEncargado: registro.profesorEncargado,
+            materia: registro.materia,
+            tipo: 'Préstamo',
+            comentario: registro.comentario
+        };
+        
+        // Agregar al inicio del historial local
+        historial.unshift(nuevoMovimiento);
+        
+        // Actualizar visualmente los equipos
+        actualizarEstadoEquipos();
+        
         cerrarModal();
         mostrarEstadoSync('Préstamo registrado correctamente', 'success');
         
-        // Recargar datos después de un momento para ver el cambio
+        // Recargar datos desde el servidor después para sincronizar
         setTimeout(() => {
             cargarDatos();
-        }, 3000);
+        }, 2000);
         
     } catch (error) {
         console.error('Error registrando préstamo:', error);
@@ -376,13 +395,34 @@ async function procesarDevolucion() {
     try {
         mostrarEstadoSync('Registrando devolución...');
         await registrarEnGoogleForm(registro);
+        
+        // Actualizar el historial local inmediatamente para feedback visual
+        const nuevoMovimiento = {
+            marcaTemporal: new Date(),
+            equipo: registro.equipo,
+            nombreCompleto: registro.nombreCompleto,
+            documento: registro.documento,
+            curso: registro.curso,
+            telefono: registro.telefono,
+            profesorEncargado: registro.profesorEncargado,
+            materia: registro.materia,
+            tipo: 'Devolución',
+            comentario: registro.comentario
+        };
+        
+        // Agregar al inicio del historial local
+        historial.unshift(nuevoMovimiento);
+        
+        // Actualizar visualmente los equipos
+        actualizarEstadoEquipos();
+        
         cerrarModal();
         mostrarEstadoSync('Devolución registrada correctamente', 'success');
         
-        // Recargar datos después de un momento para ver el cambio
+        // Recargar datos desde el servidor después para sincronizar
         setTimeout(() => {
             cargarDatos();
-        }, 3000);
+        }, 2000);
         
     } catch (error) {
         console.error('Error registrando devolución:', error);
