@@ -305,7 +305,7 @@ function mostrarModalDevolucion(ultimoMovimiento) {
     `;
 }
 
-// Procesar registro de préstamo - MEJORADO
+// Procesar registro de préstamo - CORREGIDO CON ACTUALIZACIÓN INMEDIATA
 async function procesarPrestamo() {
     const documento = document.getElementById('documento').value.trim();
     const profesor = document.getElementById('profesor').value.trim();
@@ -337,9 +337,8 @@ async function procesarPrestamo() {
     
     try {
         mostrarEstadoSync('Registrando préstamo...');
-        await registrarEnGoogleForm(registro);
         
-        // Actualizar el historial local inmediatamente para feedback visual
+        // NUEVO: Actualizar el historial local INMEDIATAMENTE para feedback visual
         const nuevoMovimiento = {
             marcaTemporal: new Date(),
             equipo: registro.equipo,
@@ -356,25 +355,33 @@ async function procesarPrestamo() {
         // Agregar al inicio del historial local
         historial.unshift(nuevoMovimiento);
         
-        // Actualizar visualmente los equipos
+        // Actualizar visualmente los equipos INMEDIATAMENTE
         actualizarEstadoEquipos();
         
+        // Cerrar modal inmediatamente
         cerrarModal();
+        
+        // Enviar a Google Forms
+        await registrarEnGoogleForm(registro);
         mostrarEstadoSync('Préstamo registrado correctamente', 'success');
         
         // Recargar datos desde el servidor después para sincronizar
         setTimeout(() => {
             cargarDatos();
-        }, 2000);
+        }, 1000);
         
     } catch (error) {
         console.error('Error registrando préstamo:', error);
         mostrarEstadoSync('Error registrando el préstamo', 'error');
         alert('Error registrando el préstamo. Por favor, verifique su conexión e inténtelo nuevamente.');
+        
+        // Si hay error, remover el movimiento del historial local
+        historial = historial.filter(h => h !== nuevoMovimiento);
+        actualizarEstadoEquipos();
     }
 }
 
-// Procesar registro de devolución
+// Procesar registro de devolución - CORREGIDO CON ACTUALIZACIÓN INMEDIATA
 async function procesarDevolucion() {
     const comentario = document.getElementById('comentario-devolucion').value.trim();
     const estadoEquipo = obtenerEstadoEquipo(equipoSeleccionado.toString());
@@ -394,9 +401,8 @@ async function procesarDevolucion() {
     
     try {
         mostrarEstadoSync('Registrando devolución...');
-        await registrarEnGoogleForm(registro);
         
-        // Actualizar el historial local inmediatamente para feedback visual
+        // NUEVO: Actualizar el historial local INMEDIATAMENTE para feedback visual
         const nuevoMovimiento = {
             marcaTemporal: new Date(),
             equipo: registro.equipo,
@@ -413,21 +419,29 @@ async function procesarDevolucion() {
         // Agregar al inicio del historial local
         historial.unshift(nuevoMovimiento);
         
-        // Actualizar visualmente los equipos
+        // Actualizar visualmente los equipos INMEDIATAMENTE
         actualizarEstadoEquipos();
         
+        // Cerrar modal inmediatamente
         cerrarModal();
+        
+        // Enviar a Google Forms
+        await registrarEnGoogleForm(registro);
         mostrarEstadoSync('Devolución registrada correctamente', 'success');
         
         // Recargar datos desde el servidor después para sincronizar
         setTimeout(() => {
             cargarDatos();
-        }, 2000);
+        }, 1000);
         
     } catch (error) {
         console.error('Error registrando devolución:', error);
         mostrarEstadoSync('Error registrando la devolución', 'error');
         alert('Error registrando la devolución. Por favor, verifique su conexión e inténtelo nuevamente.');
+        
+        // Si hay error, remover el movimiento del historial local
+        historial = historial.filter(h => h !== nuevoMovimiento);
+        actualizarEstadoEquipos();
     }
 }
 
