@@ -17,20 +17,23 @@ const CONFIG = {
         comentario: 'entry.43776270'
     },
     SYNC_INTERVAL: 30000, // 30 segundos
-    FORM_DELAY: 15000,    // 15 segundos para que Google Forms procese
+    FORM_DELAY: 30000,    // 30 segundos para que Google Forms procese (aumentado)
     TOTAL_EQUIPOS: 40,
     RETRY_ATTEMPTS: 3,
-    RETRY_DELAY: 1000
+    RETRY_DELAY: 1000,
+    PENDING_SYNC_RETRIES: 5 // Intentos para verificar si el registro llegó a Google Sheets
 };
 
 // Estado de la aplicación
 class AppState {
     constructor() {
-        this.personas = new Map(); // Usar Map para mejor rendimiento en búsquedas
+        this.personas = new Map();
         this.historial = [];
+        this.pendingOperations = new Map(); // Para trackear operaciones pendientes
         this.equipoSeleccionado = null;
         this.isLoading = false;
         this.syncIntervalId = null;
+        this.lastSyncTime = null;
     }
 
     // Métodos para manejo de personas
@@ -51,23 +54,84 @@ class AppState {
         return this.personas.size;
     }
 
-    // Métodos para manejo de historial
+    // Métodos para manejo de historial mejorados
     addHistorialEntry(entry) {
-        this.historial.unshift({
+        const entryWithId = {
             ...entry,
-            marcaTemporal: new Date()
-        });
+            marcaTemporal: new Date(),
+            _localId: Date.now() + Math.random() // ID único para tracking local
+        };
+        
+        this.historial.unshift(entryWithId);
+        console.log('✓ Entrada agregada al historial local:', entryWithId);
+        return entryWithId;
     }
 
     removeHistorialEntry(entry) {
-        const index = this.historial.indexOf(entry);
+        const index = this.historial.findIndex(h => 
+            h._localId === entry._localId || 
+            (h.equipo === entry.equipo && h.tipo === entry.tipo && 
+             Math.abs(h.marcaTemporal - entry.marcaTemporal) < 5000)
+        );
+        
         if (index > -1) {
-            this.historial.splice(index, 1);
+            const removed = this.historial.splice(index, 1)[0];
+            console.log('✓ Entrada removida del historial local:', removed);
+            return removed;
         }
+        return null;
     }
 
     setHistorial(historialArray) {
+        // Preservar operaciones pendientes al actualizar desde servidor
+        const pendingEntries = this.historial.filter(h => h._localId && 
+            this.pendingOperations.has(h._localId));
+        
+        // Establecer historial desde servidor
         this.historial = historialArray.sort((a, b) => b.marcaTemporal - a.marcaTemporal);
+        
+        // Re-agregar operaciones pendientes que no aparecieron en el servidor
+        pendingEntries.forEach(entry => {
+            // Verificar si ya existe en el historial del servidor
+            const exists = this.historial.some(h => 
+                h.equipo === entry.equipo && 
+                h.tipo === entry.tipo &&
+                h.documento === entry.documento &&
+                Math.abs(new Date(h.marcaTemporal) - entry.marcaTemporal) < 60000 // 1 minuto de tolerancia
+            );
+            
+            if (!exists) {
+                console.log('🔄 Preservando operación pendiente:', entry);
+                this.historial.unshift(entry);
+            } else {
+                console.log('✓ Operación encontrada en servidor, removiendo pendiente:', entry);
+                this.pendingOperations.delete(entry._localId);
+            }
+        });
+        
+        console.log(`✓ Historial actualizado: ${this.historial.length} entradas (${pendingEntries.length} pendientes preservadas)`);
+    }
+
+    // Métodos para operaciones pendientes
+    addPendingOperation(localId, operationData) {
+        this.pendingOperations.set(localId, {
+            ...operationData,
+            timestamp: Date.now(),
+            retries: 0
+        });
+        console.log('📝 Operación marcada como pendiente:', localId, operationData);
+    }
+
+    removePendingOperation(localId) {
+        const removed = this.pendingOperations.delete(localId);
+        if (removed) {
+            console.log('✅ Operación pendiente completada:', localId);
+        }
+        return removed;
+    }
+
+    getPendingOperationsCount() {
+        return this.pendingOperations.size;
     }
 
     getEquipoState(numeroEquipo) {
@@ -82,7 +146,8 @@ class AppState {
         return {
             prestado: ultimoMovimiento.tipo === 'Préstamo',
             ultimoMovimiento,
-            nombreCompleto: ultimoMovimiento.nombreCompleto
+            nombreCompleto: ultimoMovimiento.nombreCompleto,
+            isPending: ultimoMovimiento._localId && this.pendingOperations.has(ultimoMovimiento._localId)
         };
     }
 }
@@ -170,7 +235,7 @@ const UI = {
         return element;
     },
 
-    // Mostrar estado de sincronización con mejor UX
+    // Mostrar estado de sincronización con información de operaciones pendientes
     showSyncStatus(mensaje, tipo = 'info', autoHide = true) {
         const syncStatus = document.getElementById('sync-status');
         if (!syncStatus) {
@@ -182,10 +247,17 @@ const UI = {
             success: '#28a745',
             error: '#dc3545',
             warning: '#ffc107',
-            info: '#17a2b8'
+            info: '#17a2b8',
+            pending: '#6f42c1'
         };
         
-        syncStatus.textContent = mensaje;
+        // Agregar información de operaciones pendientes
+        const pendingCount = appState.getPendingOperationsCount();
+        const finalMessage = pendingCount > 0 ? 
+            `${mensaje} (${pendingCount} operación${pendingCount > 1 ? 'es' : ''} pendiente${pendingCount > 1 ? 's' : ''})` : 
+            mensaje;
+        
+        syncStatus.textContent = finalMessage;
         syncStatus.className = `sync-status ${tipo}`;
         syncStatus.style.color = colors[tipo] || colors.info;
         syncStatus.style.opacity = '1';
@@ -194,8 +266,12 @@ const UI = {
             setTimeout(() => {
                 syncStatus.style.opacity = '0';
                 setTimeout(() => {
-                    syncStatus.textContent = '';
-                    syncStatus.className = 'sync-status';
+                    if (appState.getPendingOperationsCount() === 0) {
+                        syncStatus.textContent = '';
+                        syncStatus.className = 'sync-status';
+                    } else {
+                        this.showSyncStatus('Operaciones pendientes de sincronizar', 'pending', false);
+                    }
                 }, 300);
             }, 4000);
         }
@@ -332,18 +408,21 @@ const DataLoader = {
             .filter(h => h && h.equipo && ['Préstamo', 'Devolución'].includes(h.tipo));
         
         appState.setHistorial(historial);
+        appState.lastSyncTime = new Date();
         console.log(`✓ Historial cargado: ${historial.length} registros`);
     },
 
     // Cargar todos los datos con recuperación de errores
-    async loadAllData() {
+    async loadAllData(showStatus = true) {
         if (appState.isLoading) {
             console.log('Carga ya en progreso...');
             return;
         }
         
         appState.isLoading = true;
-        UI.showSyncStatus('Sincronizando datos...', 'info', false);
+        if (showStatus) {
+            UI.showSyncStatus('Sincronizando datos...', 'info', false);
+        }
         
         try {
             await Utils.retryWithBackoff(async () => {
@@ -354,11 +433,19 @@ const DataLoader = {
             });
             
             EquipmentGrid.updateAllEquipmentStates();
-            UI.showSyncStatus('✓ Datos sincronizados correctamente', 'success');
+            
+            const pendingCount = appState.getPendingOperationsCount();
+            if (pendingCount > 0) {
+                UI.showSyncStatus(`Datos sincronizados - ${pendingCount} operación${pendingCount > 1 ? 'es' : ''} pendiente${pendingCount > 1 ? 's' : ''}`, 'pending', false);
+            } else if (showStatus) {
+                UI.showSyncStatus('✓ Datos sincronizados correctamente', 'success');
+            }
             
         } catch (error) {
             console.error('Error cargando datos:', error);
-            UI.showSyncStatus('⚠ Error de sincronización - usando datos locales', 'warning');
+            if (showStatus) {
+                UI.showSyncStatus('⚠ Error de sincronización - usando datos locales', 'warning');
+            }
             
             // Intentar actualizar solo la UI con datos existentes
             try {
@@ -447,25 +534,42 @@ const EquipmentGrid = {
             
             updates.push(() => {
                 // Limpiar clases previas
-                elemento.classList.remove('equipo-prestado', 'equipo-disponible');
+                elemento.classList.remove('equipo-prestado', 'equipo-disponible', 'equipo-pending');
                 
                 if (estadoEquipo.prestado) {
                     elemento.classList.add('equipo-prestado');
-                    Object.assign(elemento.style, {
-                        backgroundColor: '#d4edda',
-                        borderColor: '#28a745',
-                        color: '#155724'
-                    });
+                    
+                    // Agregar indicador visual para operaciones pendientes
+                    if (estadoEquipo.isPending) {
+                        elemento.classList.add('equipo-pending');
+                        Object.assign(elemento.style, {
+                            backgroundColor: '#e2e3ff',
+                            borderColor: '#6f42c1',
+                            color: '#563d7c',
+                            borderStyle: 'dashed'
+                        });
+                    } else {
+                        Object.assign(elemento.style, {
+                            backgroundColor: '#d4edda',
+                            borderColor: '#28a745',
+                            color: '#155724',
+                            borderStyle: 'solid'
+                        });
+                    }
                     
                     if (estadoElemento) {
-                        estadoElemento.textContent = `Prestado a: ${estadoEquipo.nombreCompleto}`;
+                        const statusText = estadoEquipo.isPending ? 
+                            `Prestado a: ${estadoEquipo.nombreCompleto} (pendiente)` :
+                            `Prestado a: ${estadoEquipo.nombreCompleto}`;
+                        estadoElemento.textContent = statusText;
                     }
                 } else {
                     elemento.classList.add('equipo-disponible');
                     Object.assign(elemento.style, {
                         backgroundColor: '#f8f9fa',
                         borderColor: '#dee2e6',
-                        color: '#495057'
+                        color: '#495057',
+                        borderStyle: 'solid'
                     });
                     
                     if (estadoElemento) {
@@ -497,7 +601,7 @@ const EquipmentModal = {
         }
         
         if (estadoEquipo.prestado) {
-            this.showReturnForm(estadoEquipo.ultimoMovimiento);
+            this.showReturnForm(estadoEquipo.ultimoMovimiento, estadoEquipo.isPending);
         } else {
             this.showLoanForm();
         }
@@ -597,6 +701,24 @@ const EquipmentModal = {
             }
         }, 100);
     },
+
+    showReturnForm(ultimoMovimiento, isPending = false) {
+        const listaMetodos = document.getElementById('listaMetodos');
+        if (!listaMetodos) return;
+        
+        const pendingWarning = isPending ? `
+            <div style="background-color: #e2e3ff; border: 1px solid #6f42c1; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 1.2em;">⏳</span>
+                    <div>
+                        <strong style="color: #563d7c;">Operación Pendiente</strong>
+                        <p style="margin: 5px 0 0 0; font-size: 0.9em; color: #563d7c;">
+                            Este préstamo aún se está sincronizando con el servidor.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        ` : '';
 
     showReturnForm(ultimoMovimiento) {
         const listaMetodos = document.getElementById('listaMetodos');
