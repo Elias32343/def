@@ -1,4 +1,4 @@
-// Configuración de URLs y constantes
+// Sistema de Préstamo de Equipos - Versión Compacta
 const CONFIG = {
     URLS: {
         PERSONAS: 'https://docs.google.com/spreadsheets/d/1GU1oKIb9E0Vvwye6zRB2F_fT2jGzRvJ0WoLtWKuio-E/gviz/tq?tqx=out:json&gid=1744634045',
@@ -6,1106 +6,520 @@ const CONFIG = {
         GOOGLE_FORM: 'https://docs.google.com/forms/d/e/1FAIpQLSfe3gplfkjNe3qEjC5l_Jqhsrk_zPSdQM_Wg0M6BUhoHtj9tg/formResponse'
     },
     FORM_ENTRIES: {
-        equipo: 'entry.1834514522',
-        nombreCompleto: 'entry.1486223911',
-        documento: 'entry.1695051506',
-        curso: 'entry.564849635',
-        telefono: 'entry.414930075',
-        profesorEncargado: 'entry.116949605',
-        materia: 'entry.1714096158',
-        tipo: 'entry.801360829',
-        comentario: 'entry.43776270'
+        equipo: 'entry.1834514522', nombreCompleto: 'entry.1486223911', documento: 'entry.1695051506',
+        curso: 'entry.564849635', telefono: 'entry.414930075', profesorEncargado: 'entry.116949605',
+        materia: 'entry.1714096158', tipo: 'entry.801360829', comentario: 'entry.43776270'
     },
-    SYNC_INTERVAL: 30000, // 30 segundos
-    FORM_DELAY: 30000,    // 15 segundos para que Google Forms procese
-    TOTAL_EQUIPOS: 40,
-    RETRY_ATTEMPTS: 3,
-    RETRY_DELAY: 1000
+    SYNC_INTERVAL: 30000, FORM_DELAY: 15000, TOTAL_EQUIPOS: 40, RETRY_ATTEMPTS: 3, RETRY_DELAY: 1000
 };
 
-// Estado de la aplicación
-class AppState {
-    constructor() {
-        this.personas = new Map(); // Usar Map para mejor rendimiento en búsquedas
-        this.historial = [];
-        this.equipoSeleccionado = null;
-        this.isLoading = false;
-        this.syncIntervalId = null;
+// Estado global
+const state = {
+    personas: new Map(),
+    historial: [],
+    equipoSeleccionado: null,
+    isLoading: false,
+    syncIntervalId: null,
+    
+    setPersonas(arr) { this.personas.clear(); arr.forEach(p => p.documento && this.personas.set(p.documento, p)); },
+    findPersona(doc) { return this.personas.get(doc) || null; },
+    addHistorial(entry) { this.historial.unshift({...entry, marcaTemporal: new Date()}); },
+    removeHistorial(entry) { const i = this.historial.indexOf(entry); if(i > -1) this.historial.splice(i, 1); },
+    setHistorial(arr) { this.historial = arr.sort((a, b) => b.marcaTemporal - a.marcaTemporal); },
+    
+    getEquipoState(num) {
+        const movs = this.historial.filter(h => h.equipo === num);
+        if (!movs.length) return {prestado: false};
+        const ultimo = movs[0];
+        return {prestado: ultimo.tipo === 'Préstamo', ultimoMovimiento: ultimo, nombreCompleto: ultimo.nombreCompleto};
     }
-
-    // Métodos para manejo de personas
-    setPersonas(personasArray) {
-        this.personas.clear();
-        personasArray.forEach(persona => {
-            if (persona.documento) {
-                this.personas.set(persona.documento, persona);
-            }
-        });
-    }
-
-    findPersonaByDocumento(documento) {
-        return this.personas.get(documento) || null;
-    }
-
-    getPersonasCount() {
-        return this.personas.size;
-    }
-
-    // Métodos para manejo de historial
-    addHistorialEntry(entry) {
-        this.historial.unshift({
-            ...entry,
-            marcaTemporal: new Date()
-        });
-    }
-
-    removeHistorialEntry(entry) {
-        const index = this.historial.indexOf(entry);
-        if (index > -1) {
-            this.historial.splice(index, 1);
-        }
-    }
-
-    setHistorial(historialArray) {
-        this.historial = historialArray.sort((a, b) => b.marcaTemporal - a.marcaTemporal);
-    }
-
-    getEquipoState(numeroEquipo) {
-        const movimientosEquipo = this.historial.filter(h => h.equipo === numeroEquipo);
-        
-        if (movimientosEquipo.length === 0) {
-            return { prestado: false };
-        }
-        
-        const ultimoMovimiento = movimientosEquipo[0];
-        
-        return {
-            prestado: ultimoMovimiento.tipo === 'Préstamo',
-            ultimoMovimiento,
-            nombreCompleto: ultimoMovimiento.nombreCompleto
-        };
-    }
-}
-
-// Instancia global del estado
-const appState = new AppState();
+};
 
 // Utilidades
-const Utils = {
-    // Parsear respuesta de Google Sheets con mejor manejo de errores
-    parseGoogleSheetsResponse(text) {
-        try {
-            if (!text.startsWith('/*O_o*/\ngoogle.visualization.Query.setResponse(')) {
-                throw new Error('Formato de respuesta inválido');
-            }
-            
-            const jsonString = text.substring(47).slice(0, -2);
-            const jsonData = JSON.parse(jsonString);
-            
-            if (!jsonData?.table?.rows) {
-                throw new Error('Estructura de datos inválida');
-            }
-            
-            return jsonData;
-        } catch (error) {
-            console.error('Error parseando respuesta de Google Sheets:', error);
-            throw new Error(`Error de formato de datos: ${error.message}`);
-        }
+const utils = {
+    parseGoogleResponse(text) {
+        if (!text.startsWith('/*O_o*/\ngoogle.visualization.Query.setResponse(')) 
+            throw new Error('Formato inválido');
+        const json = text.substring(47).slice(0, -2);
+        const data = JSON.parse(json);
+        if (!data?.table?.rows) throw new Error('Estructura inválida');
+        return data;
     },
-
-    // Extraer valor de celda con validación
-    getCellValue(cell) {
-        return cell && cell.v !== null && cell.v !== undefined ? cell.v.toString().trim() : '';
-    },
-
-    // Retry con backoff exponencial
-    async retryWithBackoff(fn, attempts = CONFIG.RETRY_ATTEMPTS) {
+    
+    getCellValue: c => c && c.v !== null && c.v !== undefined ? c.v.toString().trim() : '',
+    
+    async retry(fn, attempts = CONFIG.RETRY_ATTEMPTS) {
         for (let i = 0; i < attempts; i++) {
-            try {
-                return await fn();
-            } catch (error) {
-                if (i === attempts - 1) throw error;
-                
-                const delay = CONFIG.RETRY_DELAY * Math.pow(2, i);
-                console.warn(`Intento ${i + 1} falló, reintentando en ${delay}ms...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
+            try { return await fn(); }
+            catch (e) {
+                if (i === attempts - 1) throw e;
+                await new Promise(r => setTimeout(r, CONFIG.RETRY_DELAY * Math.pow(2, i)));
             }
         }
     },
-
-    // Debounce para validaciones
-    debounce(func, wait) {
+    
+    debounce(fn, wait) {
         let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
+        return (...args) => {
             clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
+            timeout = setTimeout(() => fn(...args), wait);
         };
     },
-
-    // Validar documento
-    isValidDocument(documento) {
-        return documento && /^\d+$/.test(documento.trim()) && documento.trim().length >= 6;
-    }
+    
+    isValidDoc: doc => doc && /^\d+$/.test(doc.trim()) && doc.trim().length >= 6
 };
 
-// Manejo de UI
-const UI = {
-    // Crear elemento con atributos
-    createElement(tag, attributes = {}, textContent = '') {
-        const element = document.createElement(tag);
+// UI Functions
+const ui = {
+    showSync(msg, type = 'info', autoHide = true) {
+        const el = document.getElementById('sync-status');
+        if (!el) return console.log(`SYNC: ${msg} (${type})`);
         
-        Object.entries(attributes).forEach(([key, value]) => {
-            if (key === 'style' && typeof value === 'object') {
-                Object.assign(element.style, value);
-            } else {
-                element.setAttribute(key, value);
-            }
-        });
+        const colors = {success: '#28a745', error: '#dc3545', warning: '#ffc107', info: '#17a2b8'};
+        el.textContent = msg;
+        el.className = `sync-status ${type}`;
+        el.style.color = colors[type];
+        el.style.opacity = '1';
         
-        if (textContent) element.textContent = textContent;
-        return element;
-    },
-
-    // Mostrar estado de sincronización con mejor UX
-    showSyncStatus(mensaje, tipo = 'info', autoHide = true) {
-        const syncStatus = document.getElementById('sync-status');
-        if (!syncStatus) {
-            console.log(`SYNC: ${mensaje} (${tipo})`);
-            return;
-        }
-        
-        const colors = {
-            success: '#28a745',
-            error: '#dc3545',
-            warning: '#ffc107',
-            info: '#17a2b8'
-        };
-        
-        syncStatus.textContent = mensaje;
-        syncStatus.className = `sync-status ${tipo}`;
-        syncStatus.style.color = colors[tipo] || colors.info;
-        syncStatus.style.opacity = '1';
-        
-        if (autoHide && (tipo === 'success' || tipo === 'error')) {
+        if (autoHide && (type === 'success' || type === 'error')) {
             setTimeout(() => {
-                syncStatus.style.opacity = '0';
-                setTimeout(() => {
-                    syncStatus.textContent = '';
-                    syncStatus.className = 'sync-status';
-                }, 300);
+                el.style.opacity = '0';
+                setTimeout(() => { el.textContent = ''; el.className = 'sync-status'; }, 300);
             }, 4000);
         }
     },
-
-    // Modal mejorado con mejor accesibilidad
+    
     showModal(show = true) {
         const modal = document.getElementById('modalMetodos');
         if (!modal) return;
         
+        modal.style.display = show ? 'block' : 'none';
+        document.body.style.overflow = show ? 'hidden' : '';
+        if (!show) state.equipoSeleccionado = null;
         if (show) {
-            modal.style.display = 'block';
-            document.body.style.overflow = 'hidden';
-            // Enfocar primer elemento focuseable
-            const firstFocusable = modal.querySelector('input, button, textarea, select');
-            if (firstFocusable) firstFocusable.focus();
-        } else {
-            modal.style.display = 'none';
-            document.body.style.overflow = '';
-            appState.equipoSeleccionado = null;
+            const input = modal.querySelector('input, button, textarea, select');
+            if (input) input.focus();
         }
     },
-
-    // Validación de documento en tiempo real mejorada
-    validateDocumentRealTime: Utils.debounce(function(documento) {
-        const statusElement = document.getElementById('documento-status');
-        const btnRegistrar = document.getElementById('btn-registrar');
+    
+    validateDoc: utils.debounce(function(doc) {
+        const status = document.getElementById('documento-status');
+        const btn = document.getElementById('btn-registrar');
+        if (!status || !btn) return;
         
-        if (!statusElement || !btnRegistrar) return;
-        
-        if (!documento) {
-            statusElement.textContent = '';
-            statusElement.className = '';
-            btnRegistrar.disabled = false;
-            btnRegistrar.style.opacity = '1';
+        if (!doc) {
+            status.textContent = ''; status.className = '';
+            btn.disabled = false; btn.style.opacity = '1';
             return;
         }
         
-        // Validar formato
-        if (!Utils.isValidDocument(documento)) {
-            statusElement.textContent = '⚠ Formato de documento inválido';
-            statusElement.className = 'warning';
-            statusElement.style.color = '#ffc107';
-            btnRegistrar.disabled = true;
-            btnRegistrar.style.opacity = '0.6';
+        if (!utils.isValidDoc(doc)) {
+            status.textContent = '⚠ Formato inválido';
+            status.className = 'warning'; status.style.color = '#ffc107';
+            btn.disabled = true; btn.style.opacity = '0.6';
             return;
         }
         
-        // Buscar en base de datos
-        const persona = appState.findPersonaByDocumento(documento);
+        const persona = state.findPersona(doc);
         if (persona) {
-            statusElement.textContent = `✓ ${persona.nombreCompleto} - ${persona.curso}`;
-            statusElement.className = 'success';
-            statusElement.style.color = '#28a745';
-            btnRegistrar.disabled = false;
-            btnRegistrar.style.opacity = '1';
+            status.textContent = `✓ ${persona.nombreCompleto} - ${persona.curso}`;
+            status.className = 'success'; status.style.color = '#28a745';
+            btn.disabled = false; btn.style.opacity = '1';
         } else {
-            statusElement.textContent = `✗ Documento no encontrado (${appState.getPersonasCount()} registros disponibles)`;
-            statusElement.className = 'error';
-            statusElement.style.color = '#dc3545';
-            btnRegistrar.disabled = true;
-            btnRegistrar.style.opacity = '0.6';
+            status.textContent = `✗ No encontrado (${state.personas.size} registros)`;
+            status.className = 'error'; status.style.color = '#dc3545';
+            btn.disabled = true; btn.style.opacity = '0.6';
         }
     }, 300)
 };
 
-// Carga de datos optimizada
-const DataLoader = {
-    // Cargar personas con mejor manejo de errores
+// Carga de datos
+const loader = {
     async loadPersonas() {
-        const response = await fetch(CONFIG.URLS.PERSONAS);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
+        const resp = await fetch(CONFIG.URLS.PERSONAS);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         
-        const text = await response.text();
-        const jsonData = Utils.parseGoogleSheetsResponse(text);
+        const data = utils.parseGoogleResponse(await resp.text());
+        const personas = data.table.rows.slice(1)
+            .map(row => ({
+                nombreCompleto: utils.getCellValue(row.c[1]),
+                documento: utils.getCellValue(row.c[2]),
+                curso: utils.getCellValue(row.c[3]),
+                telefono: utils.getCellValue(row.c[4])
+            }))
+            .filter(p => p.documento && utils.isValidDoc(p.documento));
         
-        const personas = jsonData.table.rows
-            .slice(1) // Omitir encabezados
-            .map((row, index) => {
-                try {
-                    return {
-                        nombreCompleto: Utils.getCellValue(row.c[1]),
-                        documento: Utils.getCellValue(row.c[2]),
-                        curso: Utils.getCellValue(row.c[3]),
-                        telefono: Utils.getCellValue(row.c[4])
-                    };
-                } catch (err) {
-                    console.warn(`Error procesando fila ${index + 2} de personas:`, err);
-                    return null;
-                }
-            })
-            .filter(p => p && p.documento && Utils.isValidDocument(p.documento));
-        
-        appState.setPersonas(personas);
-        console.log(`✓ Personas cargadas: ${appState.getPersonasCount()}`);
+        state.setPersonas(personas);
+        console.log(`✓ Personas: ${state.personas.size}`);
     },
-
-    // Cargar historial con validación mejorada
+    
     async loadHistorial() {
-        const response = await fetch(CONFIG.URLS.HISTORIAL);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
+        const resp = await fetch(CONFIG.URLS.HISTORIAL);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         
-        const text = await response.text();
-        const jsonData = Utils.parseGoogleSheetsResponse(text);
+        const data = utils.parseGoogleResponse(await resp.text());
+        const historial = data.table.rows.slice(1)
+            .map(row => ({
+                marcaTemporal: row.c[0]?.v ? new Date(row.c[0].v) : new Date(),
+                equipo: utils.getCellValue(row.c[1]),
+                nombreCompleto: utils.getCellValue(row.c[2]),
+                documento: utils.getCellValue(row.c[3]),
+                curso: utils.getCellValue(row.c[4]),
+                telefono: utils.getCellValue(row.c[5]),
+                profesorEncargado: utils.getCellValue(row.c[6]),
+                materia: utils.getCellValue(row.c[7]),
+                tipo: utils.getCellValue(row.c[8]),
+                comentario: utils.getCellValue(row.c[9])
+            }))
+            .filter(h => h.equipo && ['Préstamo', 'Devolución'].includes(h.tipo));
         
-        const historial = jsonData.table.rows
-            .slice(1) // Omitir encabezados
-            .map((row, index) => {
-                try {
-                    const marcaTemporal = row.c[0] && row.c[0].v ? 
-                        new Date(row.c[0].v) : new Date();
-                    
-                    return {
-                        marcaTemporal,
-                        equipo: Utils.getCellValue(row.c[1]),
-                        nombreCompleto: Utils.getCellValue(row.c[2]),
-                        documento: Utils.getCellValue(row.c[3]),
-                        curso: Utils.getCellValue(row.c[4]),
-                        telefono: Utils.getCellValue(row.c[5]),
-                        profesorEncargado: Utils.getCellValue(row.c[6]),
-                        materia: Utils.getCellValue(row.c[7]),
-                        tipo: Utils.getCellValue(row.c[8]),
-                        comentario: Utils.getCellValue(row.c[9])
-                    };
-                } catch (err) {
-                    console.warn(`Error procesando fila ${index + 2} de historial:`, err);
-                    return null;
-                }
-            })
-            .filter(h => h && h.equipo && ['Préstamo', 'Devolución'].includes(h.tipo));
-        
-        appState.setHistorial(historial);
-        console.log(`✓ Historial cargado: ${historial.length} registros`);
+        state.setHistorial(historial);
+        console.log(`✓ Historial: ${historial.length}`);
     },
-
-    // Cargar todos los datos con recuperación de errores
-    async loadAllData() {
-        if (appState.isLoading) {
-            console.log('Carga ya en progreso...');
-            return;
-        }
-        
-        appState.isLoading = true;
-        UI.showSyncStatus('Sincronizando datos...', 'info', false);
+    
+    async loadAll() {
+        if (state.isLoading) return;
+        state.isLoading = true;
+        ui.showSync('Sincronizando...', 'info', false);
         
         try {
-            await Utils.retryWithBackoff(async () => {
-                await Promise.all([
-                    this.loadPersonas(),
-                    this.loadHistorial()
-                ]);
-            });
-            
-            EquipmentGrid.updateAllEquipmentStates();
-            UI.showSyncStatus('✓ Datos sincronizados correctamente', 'success');
-            
-        } catch (error) {
-            console.error('Error cargando datos:', error);
-            UI.showSyncStatus('⚠ Error de sincronización - usando datos locales', 'warning');
-            
-            // Intentar actualizar solo la UI con datos existentes
-            try {
-                EquipmentGrid.updateAllEquipmentStates();
-            } catch (uiError) {
-                console.error('Error actualizando UI:', uiError);
-                UI.showSyncStatus('❌ Error crítico - recargue la página', 'error');
-            }
+            await utils.retry(() => Promise.all([this.loadPersonas(), this.loadHistorial()]));
+            grid.updateAll();
+            ui.showSync('✓ Sincronizado', 'success');
+        } catch (e) {
+            console.error('Error:', e);
+            ui.showSync('⚠ Error - usando datos locales', 'warning');
+            try { grid.updateAll(); } catch {}
         } finally {
-            appState.isLoading = false;
+            state.isLoading = false;
         }
     }
 };
 
-// Manejo de la malla de equipos
-const EquipmentGrid = {
-    // Crear malla optimizada
+// Malla de equipos
+const grid = {
     create() {
         const malla = document.getElementById('malla');
-        if (!malla) {
-            console.error('Elemento "malla" no encontrado');
-            return;
-        }
+        if (!malla) return;
         
-        // Usar DocumentFragment para mejor rendimiento
-        const fragment = document.createDocumentFragment();
-        
+        const frag = document.createDocumentFragment();
         for (let i = 1; i <= CONFIG.TOTAL_EQUIPOS; i++) {
-            const equipo = UI.createElement('div', {
-                class: 'ramo',
-                'data-equipo': i,
-                style: {
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                    userSelect: 'none'
-                }
-            });
+            const div = document.createElement('div');
+            div.className = 'ramo';
+            div.dataset.equipo = i;
+            div.style.cssText = 'cursor:pointer;transition:all 0.2s;user-select:none';
+            div.onclick = () => modal.open(i);
             
-            // Event listener optimizado
-            equipo.addEventListener('click', () => EquipmentModal.open(i));
-            
-            // Hover effects
-            equipo.addEventListener('mouseenter', function() {
+            div.onmouseenter = function() {
                 if (!this.classList.contains('equipo-prestado')) {
                     this.style.transform = 'scale(1.02)';
                     this.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
                 }
-            });
+            };
+            div.onmouseleave = function() {
+                this.style.transform = this.style.boxShadow = '';
+            };
             
-            equipo.addEventListener('mouseleave', function() {
-                this.style.transform = '';
-                this.style.boxShadow = '';
-            });
-            
-            const numero = UI.createElement('div', {
-                style: { fontWeight: 'bold' }
-            }, `Equipo ${i}`);
-            
-            const estado = UI.createElement('div', {
-                class: 'estado-equipo',
-                style: {
-                    fontSize: '0.9em',
-                    marginTop: '5px'
-                }
-            }, 'Disponible');
-            
-            equipo.appendChild(numero);
-            equipo.appendChild(estado);
-            fragment.appendChild(equipo);
+            div.innerHTML = `<div style="font-weight:bold">Equipo ${i}</div><div class="estado-equipo" style="font-size:0.9em;margin-top:5px">Disponible</div>`;
+            frag.appendChild(div);
         }
         
         malla.innerHTML = '';
-        malla.appendChild(fragment);
-        console.log('✓ Malla de equipos creada');
+        malla.appendChild(frag);
     },
-
-    // Actualizar estado de todos los equipos optimizado
-    updateAllEquipmentStates() {
-        const equipments = document.querySelectorAll('[data-equipo]');
-        const updates = [];
-        
-        equipments.forEach(elemento => {
-            const numeroEquipo = elemento.dataset.equipo;
-            const estadoEquipo = appState.getEquipoState(numeroEquipo);
-            const estadoElemento = elemento.querySelector('.estado-equipo');
+    
+    updateAll() {
+        document.querySelectorAll('[data-equipo]').forEach(el => {
+            const num = el.dataset.equipo;
+            const estado = state.getEquipoState(num);
+            const statusEl = el.querySelector('.estado-equipo');
             
-            updates.push(() => {
-                // Limpiar clases previas
-                elemento.classList.remove('equipo-prestado', 'equipo-disponible');
-                
-                if (estadoEquipo.prestado) {
-                    elemento.classList.add('equipo-prestado');
-                    Object.assign(elemento.style, {
-                        backgroundColor: '#d4edda',
-                        borderColor: '#28a745',
-                        color: '#155724'
-                    });
-                    
-                    if (estadoElemento) {
-                        estadoElemento.textContent = `Prestado a: ${estadoEquipo.nombreCompleto}`;
-                    }
-                } else {
-                    elemento.classList.add('equipo-disponible');
-                    Object.assign(elemento.style, {
-                        backgroundColor: '#f8f9fa',
-                        borderColor: '#dee2e6',
-                        color: '#495057'
-                    });
-                    
-                    if (estadoElemento) {
-                        estadoElemento.textContent = 'Disponible';
-                    }
-                }
-            });
+            el.classList.remove('equipo-prestado', 'equipo-disponible');
+            
+            if (estado.prestado) {
+                el.classList.add('equipo-prestado');
+                Object.assign(el.style, {backgroundColor: '#d4edda', borderColor: '#28a745', color: '#155724'});
+                if (statusEl) statusEl.textContent = `Prestado a: ${estado.nombreCompleto}`;
+            } else {
+                el.classList.add('equipo-disponible');
+                Object.assign(el.style, {backgroundColor: '#f8f9fa', borderColor: '#dee2e6', color: '#495057'});
+                if (statusEl) statusEl.textContent = 'Disponible';
+            }
         });
-        
-        // Batch DOM updates
-        updates.forEach(update => update());
-        console.log('✓ Estados de equipos actualizados');
     }
 };
 
-// Manejo de modales mejorado
-const EquipmentModal = {
-    open(numeroEquipo) {
-        console.log(`Abriendo modal para equipo ${numeroEquipo}`);
-        appState.equipoSeleccionado = numeroEquipo;
+// Modal de equipos
+const modal = {
+    open(num) {
+        state.equipoSeleccionado = num;
+        const estado = state.getEquipoState(num.toString());
         
-        const estadoEquipo = appState.getEquipoState(numeroEquipo.toString());
+        const header = document.querySelector('#modalMetodos .modal-header h2');
+        if (header) header.textContent = `Equipo ${num}`;
         
-        // Actualizar header del modal
-        const modal = document.getElementById('modalMetodos');
-        const header = modal?.querySelector('.modal-header h2');
-        if (header) {
-            header.textContent = `Equipo ${numeroEquipo}`;
-        }
-        
-        if (estadoEquipo.prestado) {
-            this.showReturnForm(estadoEquipo.ultimoMovimiento);
-        } else {
-            this.showLoanForm();
-        }
-        
-        UI.showModal(true);
+        estado.prestado ? this.showReturn(estado.ultimoMovimiento) : this.showLoan();
+        ui.showModal(true);
     },
-
-    showLoanForm() {
-        const listaMetodos = document.getElementById('listaMetodos');
-        if (!listaMetodos) return;
+    
+    showLoan() {
+        const lista = document.getElementById('listaMetodos');
+        if (!lista) return;
         
-        listaMetodos.innerHTML = `
-            <div class="formulario-prestamo" style="padding: 20px;">
-                <div style="margin-bottom: 15px;">
-                    <label for="documento" style="display: block; margin-bottom: 5px; font-weight: bold;">
-                        Documento: <span style="color: #dc3545;">*</span>
-                    </label>
-                    <input 
-                        type="text" 
-                        id="documento" 
-                        placeholder="Ej: 12345678" 
-                        style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px;"
-                        autocomplete="off"
-                        inputmode="numeric"
-                        pattern="[0-9]*"
-                    />
-                    <small id="documento-status" style="display: block; margin-top: 5px; font-size: 0.85em;"></small>
+        lista.innerHTML = `
+            <div class="formulario-prestamo" style="padding:20px">
+                <div style="margin-bottom:15px">
+                    <label for="documento" style="display:block;margin-bottom:5px;font-weight:bold">Documento: <span style="color:#dc3545">*</span></label>
+                    <input type="text" id="documento" placeholder="Ej: 12345678" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;font-size:16px" autocomplete="off" inputmode="numeric" pattern="[0-9]*"/>
+                    <small id="documento-status" style="display:block;margin-top:5px;font-size:0.85em"></small>
                 </div>
-                
-                <div style="margin-bottom: 15px;">
-                    <label for="profesor" style="display: block; margin-bottom: 5px; font-weight: bold;">
-                        Profesor(a) Encargado: <span style="color: #dc3545;">*</span>
-                    </label>
-                    <input 
-                        type="text" 
-                        id="profesor" 
-                        placeholder="Nombre completo del profesor" 
-                        style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px;"
-                        autocomplete="off"
-                    />
+                <div style="margin-bottom:15px">
+                    <label for="profesor" style="display:block;margin-bottom:5px;font-weight:bold">Profesor(a): <span style="color:#dc3545">*</span></label>
+                    <input type="text" id="profesor" placeholder="Nombre completo" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;font-size:16px"/>
                 </div>
-                
-                <div style="margin-bottom: 20px;">
-                    <label for="asignatura" style="display: block; margin-bottom: 5px; font-weight: bold;">
-                        Asignatura: <span style="color: #dc3545;">*</span>
-                    </label>
-                    <input 
-                        type="text" 
-                        id="asignatura" 
-                        placeholder="Nombre de la materia" 
-                        style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px;"
-                        autocomplete="off"
-                    />
+                <div style="margin-bottom:20px">
+                    <label for="asignatura" style="display:block;margin-bottom:5px;font-weight:bold">Asignatura: <span style="color:#dc3545">*</span></label>
+                    <input type="text" id="asignatura" placeholder="Nombre materia" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;font-size:16px"/>
                 </div>
-                
-                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 30px;">
-                    <button id="btn-registrar" onclick="LoanProcessor.process()" 
-                        style="background-color: #007bff; color: white; border: none; padding: 12px 24px; border-radius: 4px; cursor: pointer; font-size: 16px; transition: all 0.2s;">
-                        Registrar Préstamo
-                    </button>
-                    <button onclick="EquipmentModal.close()" 
-                        style="background-color: #6c757d; color: white; border: none; padding: 12px 24px; border-radius: 4px; cursor: pointer; font-size: 16px;">
-                        Cancelar
-                    </button>
+                <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:30px">
+                    <button id="btn-registrar" onclick="loan.process()" style="background:#007bff;color:white;border:none;padding:12px 24px;border-radius:4px;cursor:pointer;font-size:16px">Registrar Préstamo</button>
+                    <button onclick="modal.close()" style="background:#6c757d;color:white;border:none;padding:12px 24px;border-radius:4px;cursor:pointer;font-size:16px">Cancelar</button>
                 </div>
-            </div>
-        `;
+            </div>`;
         
-        // Setup form interactions
         setTimeout(() => {
-            const documentoInput = document.getElementById('documento');
-            if (documentoInput) {
-                documentoInput.focus();
-                
-                // Validación en tiempo real
-                documentoInput.addEventListener('input', (e) => {
-                    UI.validateDocumentRealTime(e.target.value.trim());
-                });
-                
-                // Solo permitir números
-                documentoInput.addEventListener('keypress', (e) => {
-                    if (!/\d/.test(e.key) && !['Backspace', 'Delete', 'Tab', 'Enter'].includes(e.key)) {
-                        e.preventDefault();
-                    }
-                });
+            const docInput = document.getElementById('documento');
+            if (docInput) {
+                docInput.focus();
+                docInput.oninput = e => ui.validateDoc(e.target.value.trim());
+                docInput.onkeypress = e => {
+                    if (!/\d/.test(e.key) && !['Backspace', 'Delete', 'Tab', 'Enter'].includes(e.key)) e.preventDefault();
+                };
             }
             
-            // Enter key submission
             const form = document.querySelector('.formulario-prestamo');
-            if (form) {
-                form.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter' && !e.target.matches('textarea')) {
-                        e.preventDefault();
-                        LoanProcessor.process();
-                    }
-                });
-            }
+            if (form) form.onkeypress = e => e.key === 'Enter' && !e.target.matches('textarea') && (e.preventDefault(), loan.process());
         }, 100);
     },
-
-    showReturnForm(ultimoMovimiento) {
-        const listaMetodos = document.getElementById('listaMetodos');
-        if (!listaMetodos) return;
+    
+    showReturn(ultimo) {
+        const lista = document.getElementById('listaMetodos');
+        if (!lista) return;
         
-        listaMetodos.innerHTML = `
-            <div style="padding: 20px;">
-                <div class="readonly-info" style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #007bff;">
-                    <h4 style="margin-top: 0; color: #495057; margin-bottom: 15px;">📋 Información del Préstamo</h4>
-                    <div style="display: grid; gap: 8px;">
-                        <p style="margin: 0;"><strong>Nombre:</strong> ${ultimoMovimiento.nombreCompleto}</p>
-                        <p style="margin: 0;"><strong>Documento:</strong> ${ultimoMovimiento.documento}</p>
-                        <p style="margin: 0;"><strong>Curso:</strong> ${ultimoMovimiento.curso}</p>
-                        <p style="margin: 0;"><strong>Profesor:</strong> ${ultimoMovimiento.profesorEncargado}</p>
-                        <p style="margin: 0;"><strong>Asignatura:</strong> ${ultimoMovimiento.materia}</p>
-                        <p style="margin: 0;"><strong>Prestado:</strong> ${ultimoMovimiento.marcaTemporal.toLocaleString()}</p>
+        lista.innerHTML = `
+            <div style="padding:20px">
+                <div style="background:#f8f9fa;padding:20px;border-radius:8px;margin-bottom:20px;border-left:4px solid #007bff">
+                    <h4 style="margin-top:0;color:#495057;margin-bottom:15px">📋 Información del Préstamo</h4>
+                    <div style="display:grid;gap:8px">
+                        <p style="margin:0"><strong>Nombre:</strong> ${ultimo.nombreCompleto}</p>
+                        <p style="margin:0"><strong>Documento:</strong> ${ultimo.documento}</p>
+                        <p style="margin:0"><strong>Curso:</strong> ${ultimo.curso}</p>
+                        <p style="margin:0"><strong>Profesor:</strong> ${ultimo.profesorEncargado}</p>
+                        <p style="margin:0"><strong>Asignatura:</strong> ${ultimo.materia}</p>
+                        <p style="margin:0"><strong>Prestado:</strong> ${ultimo.marcaTemporal.toLocaleString()}</p>
                     </div>
                 </div>
-                
-                <div style="margin-bottom: 20px;">
-                    <label for="comentario-devolucion" style="display: block; margin-bottom: 8px; font-weight: bold;">
-                        💬 Comentarios sobre la devolución (opcional):
-                    </label>
-                    <textarea 
-                        id="comentario-devolucion" 
-                        placeholder="Estado del equipo, daños, observaciones..."
-                        style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 4px; min-height: 100px; resize: vertical; font-family: inherit; font-size: 14px;"
-                    ></textarea>
+                <div style="margin-bottom:20px">
+                    <label for="comentario-devolucion" style="display:block;margin-bottom:8px;font-weight:bold">💬 Comentarios (opcional):</label>
+                    <textarea id="comentario-devolucion" placeholder="Estado del equipo, daños, observaciones..." style="width:100%;padding:12px;border:1px solid #ddd;border-radius:4px;min-height:100px;resize:vertical;font-family:inherit;font-size:14px"></textarea>
                 </div>
-                
-                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 30px;">
-                    <button onclick="ReturnProcessor.process()" 
-                        style="background-color: #28a745; color: white; border: none; padding: 12px 24px; border-radius: 4px; cursor: pointer; font-size: 16px;">
-                        ✓ Registrar Devolución
-                    </button>
-                    <button onclick="EquipmentModal.close()" 
-                        style="background-color: #6c757d; color: white; border: none; padding: 12px 24px; border-radius: 4px; cursor: pointer; font-size: 16px;">
-                        Cancelar
-                    </button>
+                <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:30px">
+                    <button onclick="returnProc.process()" style="background:#28a745;color:white;border:none;padding:12px 24px;border-radius:4px;cursor:pointer;font-size:16px">✓ Registrar Devolución</button>
+                    <button onclick="modal.close()" style="background:#6c757d;color:white;border:none;padding:12px 24px;border-radius:4px;cursor:pointer;font-size:16px">Cancelar</button>
                 </div>
-            </div>
-        `;
+            </div>`;
     },
-
-    close() {
-        UI.showModal(false);
-    }
+    
+    close() { ui.showModal(false); }
 };
 
-// Procesamiento de préstamos mejorado
-const LoanProcessor = {
+// Procesador de préstamos
+const loan = {
     async process() {
-        if (appState.isLoading) {
-            UI.showSyncStatus('Operación en progreso, espere...', 'warning');
-            return;
-        }
+        if (state.isLoading) return ui.showSync('Operación en progreso...', 'warning');
         
-        const formData = this.getFormData();
-        if (!formData) return;
+        const doc = document.getElementById('documento')?.value.trim();
+        const prof = document.getElementById('profesor')?.value.trim();
+        const asig = document.getElementById('asignatura')?.value.trim();
         
-        const validationError = this.validateFormData(formData);
-        if (validationError) {
-            alert(validationError);
-            return;
-        }
+        if (!doc || !prof || !asig) return alert('Todos los campos son requeridos');
+        if (!utils.isValidDoc(doc)) return alert('Documento inválido');
+        if (prof.length < 3) return alert('Nombre de profesor muy corto');
+        if (asig.length < 2) return alert('Nombre de asignatura muy corto');
         
-        const persona = appState.findPersonaByDocumento(formData.documento);
-        if (!persona) {
-            alert(`El documento "${formData.documento}" no está registrado.\n\nPersonas disponibles: ${appState.getPersonasCount()}`);
-            return;
-        }
+        const persona = state.findPersona(doc);
+        if (!persona) return alert(`Documento "${doc}" no registrado.\nPersonas: ${state.personas.size}`);
         
-        const registro = this.createLoanRecord(formData, persona);
-        
-        try {
-            await this.submitLoan(registro);
-        } catch (error) {
-            console.error('Error procesando préstamo:', error);
-            alert('Error registrando el préstamo. Verifique su conexión e inténtelo nuevamente.');
-        }
-    },
-
-    getFormData() {
-        const documentoInput = document.getElementById('documento');
-        const profesorInput = document.getElementById('profesor');
-        const asignaturaInput = document.getElementById('asignatura');
-        
-        if (!documentoInput || !profesorInput || !asignaturaInput) {
-            console.error('Campos del formulario no encontrados');
-            alert('Error: Formulario no válido');
-            return null;
-        }
-        
-        return {
-            documento: documentoInput.value.trim(),
-            profesor: profesorInput.value.trim(),
-            asignatura: asignaturaInput.value.trim()
-        };
-    },
-
-    validateFormData(data) {
-        if (!data.documento) return 'El documento es requerido';
-        if (!data.profesor) return 'El profesor encargado es requerido';
-        if (!data.asignatura) return 'La asignatura es requerida';
-        
-        if (!Utils.isValidDocument(data.documento)) {
-            return 'El documento debe contener solo números y tener al menos 6 dígitos';
-        }
-        
-        if (data.profesor.length < 3) return 'El nombre del profesor es muy corto';
-        if (data.asignatura.length < 2) return 'El nombre de la asignatura es muy corto';
-        
-        return null;
-    },
-
-    createLoanRecord(formData, persona) {
-        return {
-            equipo: appState.equipoSeleccionado.toString(),
+        const registro = {
+            equipo: state.equipoSeleccionado.toString(),
             nombreCompleto: persona.nombreCompleto,
             documento: persona.documento,
             curso: persona.curso,
             telefono: persona.telefono,
-            profesorEncargado: formData.profesor,
-            materia: formData.asignatura,
+            profesorEncargado: prof,
+            materia: asig,
             tipo: 'Préstamo',
             comentario: ''
         };
+        
+        try { await this.submit(registro); }
+        catch (e) { alert('Error registrando préstamo. Verifique conexión.'); }
     },
-
-    async submitLoan(registro) {
-        UI.showSyncStatus('Registrando préstamo...', 'info', false);
+    
+    async submit(reg) {
+        ui.showSync('Registrando préstamo...', 'info', false);
         
-        // Crear movimiento local
-        const nuevoMovimiento = {
-            marcaTemporal: new Date(),
-            ...registro
-        };
-        
-        // Actualizar estado local inmediatamente
-        appState.addHistorialEntry(nuevoMovimiento);
-        EquipmentGrid.updateAllEquipmentStates();
-        EquipmentModal.close();
+        const mov = {marcaTemporal: new Date(), ...reg};
+        state.addHistorial(mov);
+        grid.updateAll();
+        modal.close();
         
         try {
-            // Enviar a Google Forms
-            await FormSubmitter.submit(registro);
-            UI.showSyncStatus('✓ Préstamo registrado correctamente', 'success');
-            
-            // Recargar después del delay de Google Forms
-            setTimeout(() => {
-                console.log('Recargando datos después de préstamo...');
-                DataLoader.loadAllData();
-            }, CONFIG.FORM_DELAY);
-            
-        } catch (error) {
-            // Revertir cambios locales en caso de error
-            appState.removeHistorialEntry(nuevoMovimiento);
-            EquipmentGrid.updateAllEquipmentStates();
-            throw error;
+            await form.submit(reg);
+            ui.showSync('✓ Préstamo registrado', 'success');
+            setTimeout(() => loader.loadAll(), CONFIG.FORM_DELAY);
+        } catch (e) {
+            state.removeHistorial(mov);
+            grid.updateAll();
+            throw e;
         }
     }
 };
 
-// Procesamiento de devoluciones mejorado
-const ReturnProcessor = {
+// Procesador de devoluciones
+const returnProc = {
     async process() {
-        if (appState.isLoading) {
-            UI.showSyncStatus('Operación en progreso, espere...', 'warning');
-            return;
-        }
+        if (state.isLoading) return ui.showSync('Operación en progreso...', 'warning');
         
-        const estadoEquipo = appState.getEquipoState(appState.equipoSeleccionado.toString());
-        const ultimoMovimiento = estadoEquipo.ultimoMovimiento;
+        const estado = state.getEquipoState(state.equipoSeleccionado.toString());
+        if (!estado.ultimoMovimiento) return alert('Error: No hay información del préstamo');
         
-        if (!ultimoMovimiento) {
-            alert('Error: No se pudo obtener la información del préstamo');
-            return;
-        }
-        
-        const comentarioInput = document.getElementById('comentario-devolucion');
-        const comentario = comentarioInput ? comentarioInput.value.trim() : '';
+        const comentario = document.getElementById('comentario-devolucion')?.value.trim() || '';
+        const ultimo = estado.ultimoMovimiento;
         
         const registro = {
-            equipo: appState.equipoSeleccionado.toString(),
-            nombreCompleto: ultimoMovimiento.nombreCompleto,
-            documento: ultimoMovimiento.documento,
-            curso: ultimoMovimiento.curso,
-            telefono: ultimoMovimiento.telefono,
-            profesorEncargado: ultimoMovimiento.profesorEncargado,
-            materia: ultimoMovimiento.materia,
+            equipo: state.equipoSeleccionado.toString(),
+            nombreCompleto: ultimo.nombreCompleto,
+            documento: ultimo.documento,
+            curso: ultimo.curso,
+            telefono: ultimo.telefono,
+            profesorEncargado: ultimo.profesorEncargado,
+            materia: ultimo.materia,
             tipo: 'Devolución',
-            comentario: comentario
+            comentario
         };
         
-        try {
-            await this.submitReturn(registro);
-        } catch (error) {
-            console.error('Error procesando devolución:', error);
-            alert('Error registrando la devolución. Verifique su conexión e inténtelo nuevamente.');
-        }
+        try { await this.submit(registro); }
+        catch (e) { alert('Error registrando devolución. Verifique conexión.'); }
     },
-
-    async submitReturn(registro) {
-        UI.showSyncStatus('Registrando devolución...', 'info', false);
+    
+    async submit(reg) {
+        ui.showSync('Registrando devolución...', 'info', false);
         
-        // Crear movimiento local
-        const nuevoMovimiento = {
-            marcaTemporal: new Date(),
-            ...registro
-        };
-        
-        // Actualizar estado local inmediatamente
-        appState.addHistorialEntry(nuevoMovimiento);
-        EquipmentGrid.updateAllEquipmentStates();
-        EquipmentModal.close();
+        const mov = {marcaTemporal: new Date(), ...reg};
+        state.addHistorial(mov);
+        grid.updateAll();
+        modal.close();
         
         try {
-            // Enviar a Google Forms
-            await FormSubmitter.submit(registro);
-            UI.showSyncStatus('✓ Devolución registrada correctamente', 'success');
-            
-            // Recargar después del delay de Google Forms
-            setTimeout(() => {
-                console.log('Recargando datos después de devolución...');
-                DataLoader.loadAllData();
-            }, CONFIG.FORM_DELAY);
-            
-        } catch (error) {
-            // Revertir cambios locales en caso de error
-            appState.removeHistorialEntry(nuevoMovimiento);
-            EquipmentGrid.updateAllEquipmentStates();
-            throw error;
+            await form.submit(reg);
+            ui.showSync('✓ Devolución registrada', 'success');
+            setTimeout(() => loader.loadAll(), CONFIG.FORM_DELAY);
+        } catch (e) {
+            state.removeHistorial(mov);
+            grid.updateAll();
+            throw e;
         }
     }
 };
 
-// Envío de formularios con mejor manejo de errores
-const FormSubmitter = {
-    async submit(registro) {
-        console.log('Enviando registro a Google Forms:', registro);
-        
+// Envío de formularios
+const form = {
+    async submit(reg) {
         const formData = new FormData();
-        
-        // Mapear todos los campos al formulario
         Object.entries(CONFIG.FORM_ENTRIES).forEach(([key, entryId]) => {
-            const value = registro[key] || '';
-            formData.append(entryId, value);
+            formData.append(entryId, reg[key] || '');
         });
         
-        // Log para debugging
-        if (console.log) {
-            console.group('Datos enviados a Google Forms:');
-            Object.entries(CONFIG.FORM_ENTRIES).forEach(([key, entryId]) => {
-                console.log(`${key}: "${registro[key] || ''}" → ${entryId}`);
-            });
-            console.groupEnd();
-        }
-        
         try {
-            const response = await fetch(CONFIG.URLS.GOOGLE_FORM, {
-                method: 'POST',
-                mode: 'no-cors',
-                body: formData
-            });
-            
-            console.log('✓ Registro enviado a Google Forms');
-            return true;
-            
-        } catch (error) {
-            console.error('❌ Error enviando a Google Forms:', error);
-            throw new Error('No se pudo enviar el registro al servidor');
+            await fetch(CONFIG.URLS.GOOGLE_FORM, {method: 'POST', mode: 'no-cors', body: formData});
+            console.log('✓ Enviado a Google Forms');
+        } catch (e) {
+            console.error('Error:', e);
+            throw new Error('No se pudo enviar');
         }
     }
 };
 
-// Manejo de eventos globales mejorado
-const EventManager = {
+// Event Manager
+const events = {
     init() {
-        // Event listeners para el modal
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                EquipmentModal.close();
-            }
-        });
-        
-        // Click fuera del modal para cerrar
-        window.addEventListener('click', (event) => {
-            const modal = document.getElementById('modalMetodos');
-            if (event.target === modal) {
-                EquipmentModal.close();
-            }
-        });
-        
-        // Recargar datos cuando la ventana recibe el foco
-        window.addEventListener('focus', () => {
-            if (!appState.isLoading) {
-                console.log('Ventana recibió el foco, recargando datos...');
-                DataLoader.loadAllData();
-            }
-        });
-        
-        // Manejo de errores globales
-        window.addEventListener('error', (event) => {
-            console.error('Error global:', event.error);
-            UI.showSyncStatus('Error inesperado - recargue la página si persiste', 'error');
-        });
-        
-        // Manejo de errores de promesas no capturadas
-        window.addEventListener('unhandledrejection', (event) => {
-            console.error('Promesa rechazada no manejada:', event.reason);
-            UI.showSyncStatus('Error de conexión - verificando...', 'warning');
-        });
-        
-        console.log('✓ Event listeners configurados');
+        document.onkeydown = e => e.key === 'Escape' && modal.close();
+        window.onclick = e => e.target === document.getElementById('modalMetodos') && modal.close();
+        window.onfocus = () => !state.isLoading && loader.loadAll();
+        window.onerror = e => ui.showSync('Error inesperado', 'error');
+        window.onunhandledrejection = () => ui.showSync('Error de conexión', 'warning');
     },
-
-    // Configurar sincronización automática
-    setupAutoSync() {
-        // Limpiar intervalo anterior si existe
-        if (appState.syncIntervalId) {
-            clearInterval(appState.syncIntervalId);
-        }
-        
-        // Configurar nuevo intervalo
-        appState.syncIntervalId = setInterval(() => {
-            if (!appState.isLoading && document.visibilityState === 'visible') {
-                console.log('Sincronización automática...');
-                DataLoader.loadAllData();
-            }
+    
+    setupSync() {
+        if (state.syncIntervalId) clearInterval(state.syncIntervalId);
+        state.syncIntervalId = setInterval(() => {
+            if (!state.isLoading && document.visibilityState === 'visible') loader.loadAll();
         }, CONFIG.SYNC_INTERVAL);
-        
-        console.log(`✓ Sincronización automática cada ${CONFIG.SYNC_INTERVAL / 1000}s`);
-    },
-
-    // Limpiar recursos
-    cleanup() {
-        if (appState.syncIntervalId) {
-            clearInterval(appState.syncIntervalId);
-            appState.syncIntervalId = null;
-        }
     }
 };
 
-// Funciones de debugging mejoradas
-const Debug = {
-    logPersonas() {
-        console.group('🔍 DEBUG - PERSONAS');
-        console.log(`Total personas: ${appState.getPersonasCount()}`);
-        
-        const personas = Array.from(appState.personas.values()).slice(0, 10);
-        console.table(personas.map(p => ({
-            documento: p.documento,
-            nombre: p.nombreCompleto,
-            curso: p.curso
-        })));
-        
-        console.groupEnd();
-    },
-
-    logHistorial() {
-        console.group('🔍 DEBUG - HISTORIAL');
-        console.log(`Total registros: ${appState.historial.length}`);
-        
-        const recientes = appState.historial.slice(0, 10);
-        console.table(recientes.map(h => ({
-            equipo: h.equipo,
-            tipo: h.tipo,
-            nombre: h.nombreCompleto,
-            fecha: h.marcaTemporal.toLocaleString()
-        })));
-        
-        console.groupEnd();
-    },
-
-    logEquiposStatus() {
-        console.group('🔍 DEBUG - ESTADO EQUIPOS');
-        
+// Debug functions
+const debug = {
+    personas: () => console.table(Array.from(state.personas.values()).slice(0, 10)),
+    historial: () => console.table(state.historial.slice(0, 10)),
+    equipos: () => {
         const prestados = [];
-        const disponibles = [];
-        
         for (let i = 1; i <= CONFIG.TOTAL_EQUIPOS; i++) {
-            const estado = appState.getEquipoState(i.toString());
-            if (estado.prestado) {
-                prestados.push({
-                    equipo: i,
-                    usuario: estado.nombreCompleto,
-                    fecha: estado.ultimoMovimiento.marcaTemporal.toLocaleString()
-                });
-            } else {
-                disponibles.push(i);
-            }
+            const est = state.getEquipoState(i.toString());
+            if (est.prestado) prestados.push({equipo: i, usuario: est.nombreCompleto});
         }
-        
-        console.log(`Equipos prestados: ${prestados.length}`);
         console.table(prestados);
-        console.log(`Equipos disponibles (${disponibles.length}):`, disponibles.join(', '));
-        
-        console.groupEnd();
     },
-
-    resetMalla() {
-        if (!confirm('⚠️ ¿Está seguro de resetear la vista local?\n\nEsto mostrará todos los equipos como disponibles hasta la próxima sincronización.')) {
-            return;
-        }
-        
-        appState.setHistorial([]);
-        EquipmentGrid.updateAllEquipmentStates();
-        UI.showSyncStatus('Vista local reseteada', 'warning');
-        console.log('🔄 Vista local reseteada');
-    },
-
-    forceSync() {
-        console.log('🔄 Forzando sincronización...');
-        DataLoader.loadAllData();
-    },
-
-    showStats() {
-        console.group('📊 ESTADÍSTICAS DEL SISTEMA');
-        console.log(`Personas registradas: ${appState.getPersonasCount()}`);
-        console.log(`Movimientos registrados: ${appState.historial.length}`);
-        
-        const equiposPrestados = [];
-        for (let i = 1; i <= CONFIG.TOTAL_EQUIPOS; i++) {
-            if (appState.getEquipoState(i.toString()).prestado) {
-                equiposPrestados.push(i);
-            }
-        }
-        
-        console.log(`Equipos prestados: ${equiposPrestados.length}/${CONFIG.TOTAL_EQUIPOS}`);
-        console.log(`Tasa de utilización: ${((equiposPrestados.length / CONFIG.TOTAL_EQUIPOS) * 100).toFixed(1)}%`);
-        
-        // Estadísticas por tipo de movimiento
-        const prestamos = appState.historial.filter(h => h.tipo === 'Préstamo').length;
-        const devoluciones = appState.historial.filter(h => h.tipo === 'Devolución').length;
-        
-        console.log(`Préstamos registrados: ${prestamos}`);
-        console.log(`Devoluciones registradas: ${devoluciones}`);
-        
-        console.groupEnd();
-    }
+    reset: () => confirm('¿Resetear vista?') && (state.setHistorial([]), grid.updateAll()),
+    sync: () => loader.loadAll()
 };
 
-// Inicialización principal mejorada
-const App = {
+// Inicialización
+const app = {
     async init() {
-        console.group('🚀 INICIANDO SISTEMA DE PRÉSTAMO DE EQUIPOS');
-        
         try {
-            // Verificar elementos DOM críticos
-            const requiredElements = ['malla', 'modalMetodos'];
-            const missingElements = requiredElements.filter(id => !document.getElementById(id));
+            const missing = ['malla', 'modalMetodos'].filter(id => !document.getElementById(id));
+            if (missing.length) throw new Error(`Elementos faltantes: ${missing.join(', ')}`);
             
-            if (missingElements.length > 0) {
-                throw new Error(`Elementos DOM faltantes: ${missingElements.join(', ')}`);
-            }
+            grid.create();
+            events.init();
+            events.setupSync();
+            await loader.loadAll();
             
-            console.log('✓ Elementos DOM verificados');
-            
-            // Inicializar componentes
-            EquipmentGrid.create();
-            EventManager.init();
-            EventManager.setupAutoSync();
-            
-            // Cargar datos iniciales
-            await DataLoader.loadAllData();
-            
-            // Exponer funciones de debugging
-            window.debug = Debug;
-            
-            console.log('✅ Sistema inicializado correctamente');
-            console.log('💡 Usa window.debug para funciones de debugging');
-            
-        } catch (error) {
-            console.error('❌ Error crítico inicializando la aplicación:', error);
-            UI.showSyncStatus('Error crítico - verifique la consola', 'error');
-            
-            // Mostrar error al usuario
-            alert(`Error inicializando la aplicación:\n\n${error.message}\n\nRevise la consola para más detalles.`);
-        } finally {
-            console.groupEnd();
+            window.debug = debug;
+            console.log('✅ Sistema inicializado');
+        } catch (e) {
+            console.error('Error:', e);
+            alert(`Error: ${e.message}`);
         }
-    },
-
-    // Cleanup cuando se cierra la aplicación
-    destroy() {
-        console.log('🧹 Limpiando recursos...');
-        EventManager.cleanup();
     }
 };
 
-// Event listeners de carga
-document.addEventListener('DOMContentLoaded', () => {
-    App.init();
-});
+// Eventos de carga
+document.addEventListener('DOMContentLoaded', app.init);
+window.addEventListener('beforeunload', () => state.syncIntervalId && clearInterval(state.syncIntervalId));
 
-window.addEventListener('beforeunload', () => {
-    App.destroy();
-});
-
-// Exponer API pública
+// API pública
 window.EquipmentLoanSystem = {
-    debug: Debug,
-    forceSync: () => DataLoader.loadAllData(),
+    debug,
+    forceSync: () => loader.loadAll(),
     getStats: () => ({
-        personas: appState.getPersonasCount(),
-        historial: appState.historial.length,
+        personas: state.personas.size,
+        historial: state.historial.length,
         equiposPrestados: Array.from({length: CONFIG.TOTAL_EQUIPOS}, (_, i) => i + 1)
-            .filter(i => appState.getEquipoState(i.toString()).prestado).length
+            .filter(i => state.getEquipoState(i.toString()).prestado).length
     })
 };
 
-console.log('📦 Sistema de Préstamo de Equipos v2.0 - Optimizado y listo');
+console.log('📦 Sistema de Préstamo v2.0 - Compacto');
