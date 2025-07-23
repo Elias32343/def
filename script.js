@@ -157,7 +157,12 @@ const loader = {
         state.setPersonas(personas);
         console.log(`✓ Personas: ${state.personas.size}`);
     },
-    
+    const CONFIG = {
+  URL_WEB_APP: 'https://script.google.com/macros/s/AKfycbxCr0EnWrwO8TE1fgBK5aJ7yX--LAfJJi_pPn2quK9ug8kfU2h0V4-DQNiYgDyxDwC-/exec',
+  URLS: {
+    HISTORIAL: 'https://script.google.com/macros/s/AKfycbxCr0EnWrwO8TE1fgBK5aJ7yX--LAfJJi_pPn2quK9ug8kfU2h0V4-DQNiYgDyxDwC-/exec?action=historial'
+  }
+};
     async loadHistorial() {
         const resp = await fetch(CONFIG.URLS.HISTORIAL);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -184,6 +189,28 @@ const loader = {
     
     async loadAll() {
         if (state.isLoading) return;
+document.getElementById("registro-form").addEventListener("submit", function(e) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const datos = new URLSearchParams(formData);
+
+  fetch(CONFIG.URL_WEB_APP, {
+    method: "POST",
+    body: datos
+  })
+  .then(response => response.text())
+  .then(result => {
+    document.getElementById("mensaje").textContent = "Registro exitoso.";
+    e.target.reset(); // Limpia el formulario
+    cargaHistorial(); // Recarga los datos
+  })
+  .catch(error => {
+    console.error("Error al enviar:", error);
+    document.getElementById("mensaje").textContent = "Error al registrar.";
+  });
+});
+
         state.isLoading = true;
         ui.showSync('Sincronizando...', 'info', false);
         
