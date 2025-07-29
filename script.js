@@ -157,30 +157,14 @@ const loader = {
         state.setPersonas(personas);
         console.log(`✓ Personas: ${state.personas.size}`);
     },
+    }
     
-    async loadPersonas() {
-        const resp = await fetch(CONFIG.URLS.PERSONAS);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        
-        const data = utils.parseGoogleResponse(await resp.text());
-        const personas = data.table.rows.slice(1)
-            .map(row => ({
-                nombreCompleto: utils.getCellValue(row.c[1]),
-                documento: utils.getCellValue(row.c[2]),
-                curso: utils.getCellValue(row.c[3]),
-                telefono: utils.getCellValue(row.c[4])
-            }))
-            .filter(p => p.documento && utils.isValidDoc(p.documento));
-        
-        state.setPersonas(personas);
-        console.log(`✓ Personas: ${state.personas.size}`);
-    },
     const CONFIG = {
   URL_WEB_APP: 'https://script.google.com/macros/s/AKfycbxCr0EnWrwO8TE1fgBK5aJ7yX--LAfJJi_pPn2quK9ug8kfU2h0V4-DQNiYgDyxDwC-/exec',
-  URLS: {
-    HISTORIAL: 'https://script.google.com/macros/s/AKfycbxCr0EnWrwO8TE1fgBK5aJ7yX--LAfJJi_pPn2quK9ug8kfU2h0V4-DQNiYgDyxDwC-/exec?action=historial'
+  
+  HISTORIAL: 'https://script.google.com/macros/s/AKfycbxCr0EnWrwO8TE1fgBK5aJ7yX--LAfJJi_pPn2quK9ug8kfU2h0V4-DQNiYgDyxDwC-/exec?action=historial'
   }
-};
+
     async loadHistorial() {
         const resp = await fetch(CONFIG.URLS.HISTORIAL);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
